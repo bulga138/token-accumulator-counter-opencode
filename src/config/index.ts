@@ -1,6 +1,6 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 
 export interface TacoConfig {
   db?: string
@@ -38,4 +38,17 @@ export function getConfig(): TacoConfig {
 
 export function getConfigPath(): string {
   return CONFIG_PATH
+}
+
+/** Write config to disk, creating directories as needed. */
+export function saveConfig(config: TacoConfig): void {
+  const dir = join(homedir(), '.config', 'taco')
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n', 'utf-8')
+  _config = config // invalidate cache
+}
+
+/** Reset the in-memory config cache (useful in tests). */
+export function resetConfig(): void {
+  _config = null
 }

@@ -92,6 +92,8 @@ export interface OverviewStats {
   mostActiveDay: string | null // YYYY-MM-DD
   longestSessionMs: number
   avgCostPerDay: number
+  /** Counts of each finish reason (stop, length, error, etc.) */
+  finishReasons: Record<string, number>
 }
 
 export interface ModelStats {
@@ -114,6 +116,8 @@ export interface ModelStats {
   medianOutputTps: number | null
   // Daily token series for chart: array of { date: "YYYY-MM-DD", tokens: number }
   dailySeries: DailySeries[]
+  /** Counts of each finish reason */
+  finishReasons: Record<string, number>
 }
 
 export interface ProviderStats {
@@ -161,6 +165,8 @@ export interface SessionStats {
   messageCount: number
   durationMs: number | null
   models: string[]
+  /** Counts of each finish reason */
+  finishReasons: Record<string, number>
 }
 
 export interface DailySeries {

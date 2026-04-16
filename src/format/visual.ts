@@ -24,6 +24,8 @@ import {
   truncate,
 } from '../utils/formatting.js'
 import { formatDuration } from '../utils/dates.js'
+import { detectTheme, getColors } from '../theme/index.js'
+import { buildTable } from './table.js'
 
 const useColor = process.stdout.isTTY !== false
 
@@ -31,12 +33,15 @@ const useColor = process.stdout.isTTY !== false
 const Y_OVERVIEW_OFFSET = 10 // 8 (label) + 2 (axis char + space)
 
 function header(title: string): string {
-  const prefix = useColor ? chalk.bold.yellow('🌮 TACO') : 'TACO'
-  return `\n${prefix} — ${title}\n`
+  if (!useColor) return `\nTACO — ${title}\n`
+  const colors = getColors()
+  return `\n${colors.header.bold('TACO')} — ${title}\n`
 }
 
 function divider(len: number = 56): string {
-  return useColor ? chalk.gray('─'.repeat(len)) : '─'.repeat(len)
+  if (!useColor) return '─'.repeat(len)
+  const colors = getColors()
+  return colors.muted('─'.repeat(len))
 }
 
 // ─── Overview ─────────────────────────────────────────────────────────────────
@@ -53,8 +58,11 @@ export function formatOverview(
 
   // Daily total tokens chart (if we have data)
   if (dailySeries && dailySeries.length > 0) {
-    // Chart title
-    const dim = (s: string) => (useColor ? chalk.dim(s) : s)
+    // Chart title — use muted color on light backgrounds where chalk.dim vanishes
+    const dim = (s: string) => {
+      if (!useColor) return s
+      return detectTheme() === 'light' ? getColors().muted(s) : chalk.dim(s)
+    }
     lines.push(`  ${dim('Tokens / day')}  ${dim('·')}  all models combined`)
 
     const chartLines = renderTotalChart(dailySeries, 62, 6, useColor)
@@ -82,15 +90,36 @@ export function formatOverview(
   lines.push(divider())
   lines.push('')
 
+  // Two-column KV layout needs ~100 cols; fall back to single-col on narrow terminals.
+  const termCols = process.stdout.columns || 80
+  const twoCol = termCols >= 90
+
+  // Fixed column widths so every row lines up vertically.
+  //   label col : 24 chars  (e.g. "Favorite model:         ")
+  //   value col :  valWidth  (truncated + padded — both columns use same width)
+  const VAL_WIDTH = 20
+  const LABEL_WIDTH = 24
+
   const kv = (label: string, value: string, label2?: string, value2?: string): string => {
-    const l = padEnd(label + ':', 24)
-    // Truncate from start for model names to preserve the actual model name at the end
-    const shouldTruncateFromStart = label.toLowerCase().includes('model')
-    const v = padEnd(truncate(value, 20, shouldTruncateFromStart), 22)
-    if (label2 && value2) {
-      return `  ${l} ${v}  ${padEnd(label2 + ':', 24)} ${value2}`
+    const fromStart = label.toLowerCase().includes('model')
+    const l1 = padEnd(label + ':', LABEL_WIDTH)
+    const v1 = padEnd(truncate(value, VAL_WIDTH, fromStart), VAL_WIDTH)
+    if (twoCol && label2 !== undefined && value2 !== undefined) {
+      // Both columns: same label width and same value width → perfect vertical alignment.
+      const fromStart2 = label2.toLowerCase().includes('model')
+      const l2 = padEnd(label2 + ':', LABEL_WIDTH)
+      const v2 = padEnd(truncate(value2, VAL_WIDTH, fromStart2), VAL_WIDTH)
+      return `  ${l1} ${v1}   ${l2} ${v2}`
     }
-    return `  ${l} ${v}`
+    // Single-column fallback: second KV on its own line.
+    const line1 = `  ${l1} ${v1}`
+    if (label2 !== undefined && value2 !== undefined) {
+      const fromStart2 = label2.toLowerCase().includes('model')
+      const l2 = padEnd(label2 + ':', LABEL_WIDTH)
+      const v2 = padEnd(truncate(value2, VAL_WIDTH, fromStart2), VAL_WIDTH)
+      return `${line1}\n  ${l2} ${v2}`
+    }
+    return line1
   }
 
   const fav = stats.favoriteModel ?? '—'
@@ -141,6 +170,17 @@ export function formatOverview(
   lines.push(`    ─────────────────────`)
   lines.push(`    Total:       ${padStart(formatTokens(stats.tokens.total), 10)}`)
   lines.push(`    Messages:    ${padStart(String(stats.messageCount), 10)}`)
+
+  // Show finish reason summary only when there are non-stop reasons
+  const reasons = stats.finishReasons ?? {}
+  const nonStop = Object.entries(reasons).filter(([k]) => k !== 'stop' && k !== 'unknown')
+  if (nonStop.length > 0 || Object.keys(reasons).length > 1) {
+    const parts = Object.entries(reasons)
+      .sort(([, a], [, b]) => b - a)
+      .map(([k, v]) => `${k}: ${v}`)
+    lines.push(`    Finish:      ${parts.join('  ')}`)
+  }
+
   lines.push('')
 
   return lines.join('\n')
@@ -175,29 +215,38 @@ export function formatProviders(providers: ProviderStats[], rangeLabel: string):
     return lines.join('\n')
   }
 
-  // Table header
-  const colW = { name: 16, tokens: 12, cost: 10, bar: 22, pct: 7 }
-  const headerRow = [
-    padEnd('Provider', colW.name),
-    padStart('Tokens', colW.tokens),
-    padStart('Cost', colW.cost),
-    padEnd('', colW.bar),
-    padStart('Share', colW.pct),
-  ].join('  ')
-
-  lines.push('  ' + (useColor ? chalk.bold(headerRow) : headerRow))
-  lines.push('  ' + divider(headerRow.length))
-
-  for (const p of providers) {
-    const row = [
-      padEnd(p.providerId, colW.name),
-      padStart(formatTokens(p.tokens.total), colW.tokens),
-      padStart(formatCost(p.cost), colW.cost),
-      renderBar(p.percentage, useColor),
-      padStart(formatPercent(p.percentage), colW.pct),
-    ].join('  ')
-    lines.push('  ' + row)
-  }
+  lines.push(
+    ...buildTable<ProviderStats>(
+      [
+        {
+          header: 'Provider',
+          align: 'left',
+          width: 'flex',
+          minWidth: 10,
+          maxWidth: 25,
+          render: r => r.providerId,
+        },
+        { header: 'Tokens', align: 'right', width: 12, render: r => formatTokens(r.tokens.total) },
+        { header: 'Cost', align: 'right', width: 10, render: r => formatCost(r.cost) },
+        {
+          header: '',
+          align: 'left',
+          width: 20,
+          priority: 1,
+          render: (r, w) => renderBar(r.percentage, useColor, w ?? 20),
+        },
+        {
+          header: 'Share',
+          align: 'right',
+          width: 7,
+          priority: 1,
+          render: r => formatPercent(r.percentage),
+        },
+      ],
+      providers,
+      { useColor }
+    )
+  )
 
   lines.push('')
   return lines.join('\n')
@@ -205,7 +254,11 @@ export function formatProviders(providers: ProviderStats[], rangeLabel: string):
 
 // ─── Daily ────────────────────────────────────────────────────────────────────
 
-export function formatDaily(daily: DailyStats[], rangeLabel: string): string {
+export function formatDaily(
+  daily: DailyStats[],
+  rangeLabel: string,
+  dailySeries?: DailySeries[]
+): string {
   const lines: string[] = []
   lines.push(header(`Daily Usage${rangeLabel ? ' · ' + rangeLabel : ''}`))
 
@@ -214,28 +267,49 @@ export function formatDaily(daily: DailyStats[], rangeLabel: string): string {
     return lines.join('\n')
   }
 
-  const colW = { date: 12, sessions: 10, msgs: 10, tokens: 12, cost: 10 }
-  const hdr = [
-    padEnd('Date', colW.date),
-    padStart('Sessions', colW.sessions),
-    padStart('Messages', colW.msgs),
-    padStart('Tokens', colW.tokens),
-    padStart('Cost', colW.cost),
-  ].join('  ')
+  // Tokens-over-time chart — same style as taco overview
+  const series = dailySeries ?? daily.map(d => ({ date: d.date, tokens: d.tokens.total }))
+  if (series.length > 0) {
+    const dim = (s: string) => {
+      if (!useColor) return s
+      return detectTheme() === 'light' ? getColors().muted(s) : chalk.dim(s)
+    }
+    lines.push(`  ${dim('Tokens / day')}`)
 
-  lines.push('  ' + (useColor ? chalk.bold(hdr) : hdr))
-  lines.push('  ' + divider(hdr.length))
+    const chartLines = renderTotalChart(series, 62, 6, useColor)
+    lines.push(...chartLines.map(l => '  ' + l))
 
-  for (const d of daily) {
-    const row = [
-      padEnd(d.date, colW.date),
-      padStart(String(d.sessionCount), colW.sessions),
-      padStart(String(d.messageCount), colW.msgs),
-      padStart(formatTokens(d.tokens.total), colW.tokens),
-      padStart(formatCost(d.cost), colW.cost),
-    ].join('  ')
-    lines.push('  ' + row)
+    const sorted = [...series].sort((a, b) => a.date.localeCompare(b.date))
+    const peakDay = series.reduce((max, d) => (d.tokens > max.tokens ? d : max))
+    const statParts = [
+      `${dim('Range:')} ${sorted[0]!.date} → ${sorted[sorted.length - 1]!.date}`,
+      `${dim('Peak:')} ${peakDay.date}  ${formatTokens(peakDay.tokens)}`,
+      `${dim('Active days:')} ${series.length}`,
+    ]
+    lines.push('  ' + ' '.repeat(10) + statParts.join('   '))
+    lines.push('')
   }
+
+  lines.push(
+    ...buildTable<DailyStats>(
+      [
+        {
+          header: 'Date',
+          align: 'left',
+          width: 'flex',
+          minWidth: 10,
+          maxWidth: 10,
+          render: r => r.date,
+        },
+        { header: 'Sessions', align: 'right', width: 10, render: r => String(r.sessionCount) },
+        { header: 'Messages', align: 'right', width: 10, render: r => String(r.messageCount) },
+        { header: 'Tokens', align: 'right', width: 12, render: r => formatTokens(r.tokens.total) },
+        { header: 'Cost', align: 'right', width: 10, render: r => formatCost(r.cost) },
+      ],
+      daily,
+      { useColor }
+    )
+  )
 
   lines.push('')
   return lines.join('\n')
@@ -252,28 +326,26 @@ export function formatProjects(projects: ProjectStats[], rangeLabel: string): st
     return lines.join('\n')
   }
 
-  const colW = { dir: 40, sessions: 10, msgs: 10, tokens: 12, cost: 10 }
-  const hdr = [
-    padEnd('Project', colW.dir),
-    padStart('Sessions', colW.sessions),
-    padStart('Messages', colW.msgs),
-    padStart('Tokens', colW.tokens),
-    padStart('Cost', colW.cost),
-  ].join('  ')
-
-  lines.push('  ' + (useColor ? chalk.bold(hdr) : hdr))
-  lines.push('  ' + divider(hdr.length))
-
-  for (const p of projects) {
-    const row = [
-      padEnd(truncate(p.directory, colW.dir), colW.dir),
-      padStart(String(p.sessionCount), colW.sessions),
-      padStart(String(p.messageCount), colW.msgs),
-      padStart(formatTokens(p.tokens.total), colW.tokens),
-      padStart(formatCost(p.cost), colW.cost),
-    ].join('  ')
-    lines.push('  ' + row)
-  }
+  lines.push(
+    ...buildTable<ProjectStats>(
+      [
+        {
+          header: 'Project',
+          align: 'left',
+          width: 'flex',
+          minWidth: 12,
+          maxWidth: 50,
+          render: r => r.directory,
+        },
+        { header: 'Sessions', align: 'right', width: 10, render: r => String(r.sessionCount) },
+        { header: 'Messages', align: 'right', width: 10, render: r => String(r.messageCount) },
+        { header: 'Tokens', align: 'right', width: 12, render: r => formatTokens(r.tokens.total) },
+        { header: 'Cost', align: 'right', width: 10, render: r => formatCost(r.cost) },
+      ],
+      projects,
+      { useColor }
+    )
+  )
 
   lines.push('')
   return lines.join('\n')
@@ -290,32 +362,38 @@ export function formatSessions(sessions: SessionStats[], rangeLabel: string): st
     return lines.join('\n')
   }
 
-  const colW = { title: 30, date: 14, msgs: 10, tokens: 12, cost: 10, dur: 12 }
-  const hdr = [
-    padEnd('Title / ID', colW.title),
-    padEnd('Created', colW.date),
-    padStart('Msgs', colW.msgs),
-    padStart('Tokens', colW.tokens),
-    padStart('Cost', colW.cost),
-    padStart('Duration', colW.dur),
-  ].join('  ')
-
-  lines.push('  ' + (useColor ? chalk.bold(hdr) : hdr))
-  lines.push('  ' + divider(hdr.length))
-
-  for (const s of sessions) {
-    const title = truncate(s.title ?? s.sessionId, colW.title)
-    const date = dayjs(s.timeCreated).format('MMM D HH:mm')
-    const row = [
-      padEnd(title, colW.title),
-      padEnd(date, colW.date),
-      padStart(String(s.messageCount), colW.msgs),
-      padStart(formatTokens(s.tokens.total), colW.tokens),
-      padStart(formatCost(s.cost), colW.cost),
-      padStart(s.durationMs ? formatDuration(s.durationMs) : '—', colW.dur),
-    ].join('  ')
-    lines.push('  ' + row)
-  }
+  lines.push(
+    ...buildTable<SessionStats>(
+      [
+        {
+          header: 'Title / ID',
+          align: 'left',
+          width: 'flex',
+          minWidth: 12,
+          maxWidth: 35,
+          render: r => r.title ?? r.sessionId,
+        },
+        {
+          header: 'Created',
+          align: 'left',
+          width: 13,
+          render: r => dayjs(r.timeCreated).format('MMM D HH:mm'),
+        },
+        { header: 'Msgs', align: 'right', width: 6, render: r => String(r.messageCount) },
+        { header: 'Tokens', align: 'right', width: 12, render: r => formatTokens(r.tokens.total) },
+        { header: 'Cost', align: 'right', width: 10, render: r => formatCost(r.cost) },
+        {
+          header: 'Duration',
+          align: 'right',
+          width: 10,
+          priority: 1,
+          render: r => (r.durationMs ? formatDuration(r.durationMs) : '—'),
+        },
+      ],
+      sessions,
+      { useColor }
+    )
+  )
 
   lines.push('')
   return lines.join('\n')
@@ -332,30 +410,39 @@ export function formatAgents(agents: AgentStats[], rangeLabel: string): string {
     return lines.join('\n')
   }
 
-  const colW = { agent: 14, msgs: 10, tokens: 12, cost: 10, bar: 22, pct: 7 }
-  const hdr = [
-    padEnd('Agent', colW.agent),
-    padStart('Messages', colW.msgs),
-    padStart('Tokens', colW.tokens),
-    padStart('Cost', colW.cost),
-    padEnd('', colW.bar),
-    padStart('Share', colW.pct),
-  ].join('  ')
-
-  lines.push('  ' + (useColor ? chalk.bold(hdr) : hdr))
-  lines.push('  ' + divider(hdr.length))
-
-  for (const a of agents) {
-    const row = [
-      padEnd(a.agent, colW.agent),
-      padStart(String(a.messageCount), colW.msgs),
-      padStart(formatTokens(a.tokens.total), colW.tokens),
-      padStart(formatCost(a.cost), colW.cost),
-      renderBar(a.percentage, useColor),
-      padStart(formatPercent(a.percentage), colW.pct),
-    ].join('  ')
-    lines.push('  ' + row)
-  }
+  lines.push(
+    ...buildTable<AgentStats>(
+      [
+        {
+          header: 'Agent',
+          align: 'left',
+          width: 'flex',
+          minWidth: 10,
+          maxWidth: 30,
+          render: r => r.agent,
+        },
+        { header: 'Messages', align: 'right', width: 10, render: r => String(r.messageCount) },
+        { header: 'Tokens', align: 'right', width: 12, render: r => formatTokens(r.tokens.total) },
+        { header: 'Cost', align: 'right', width: 10, render: r => formatCost(r.cost) },
+        {
+          header: '',
+          align: 'left',
+          width: 20,
+          priority: 1,
+          render: (r, w) => renderBar(r.percentage, useColor, w ?? 20),
+        },
+        {
+          header: 'Share',
+          align: 'right',
+          width: 7,
+          priority: 1,
+          render: r => formatPercent(r.percentage),
+        },
+      ],
+      agents,
+      { useColor }
+    )
+  )
 
   lines.push('')
   return lines.join('\n')
@@ -372,30 +459,33 @@ export function formatTrends(trends: PeriodStats[], period: string, rangeLabel: 
     return lines.join('\n')
   }
 
-  const colW = { period: 24, sessions: 10, msgs: 10, tokens: 12, cost: 10, delta: 14 }
-  const hdr = [
-    padEnd('Period', colW.period),
-    padStart('Sessions', colW.sessions),
-    padStart('Messages', colW.msgs),
-    padStart('Tokens', colW.tokens),
-    padStart('Cost', colW.cost),
-    padStart('Δ Cost', colW.delta),
-  ].join('  ')
-
-  lines.push('  ' + (useColor ? chalk.bold(hdr) : hdr))
-  lines.push('  ' + divider(hdr.length))
-
-  for (const t of trends) {
-    const row = [
-      padEnd(t.label, colW.period),
-      padStart(String(t.sessionCount), colW.sessions),
-      padStart(String(t.messageCount), colW.msgs),
-      padStart(formatTokens(t.tokens.total), colW.tokens),
-      padStart(formatCost(t.cost), colW.cost),
-      padStart(renderDelta(t.deltaPercent, useColor), colW.delta),
-    ].join('  ')
-    lines.push('  ' + row)
-  }
+  lines.push(
+    ...buildTable<PeriodStats>(
+      [
+        {
+          header: 'Period',
+          align: 'left',
+          width: 'flex',
+          minWidth: 12,
+          maxWidth: 24,
+          render: r => r.label,
+        },
+        { header: 'Sessions', align: 'right', width: 10, render: r => String(r.sessionCount) },
+        { header: 'Messages', align: 'right', width: 10, render: r => String(r.messageCount) },
+        { header: 'Tokens', align: 'right', width: 12, render: r => formatTokens(r.tokens.total) },
+        { header: 'Cost', align: 'right', width: 10, render: r => formatCost(r.cost) },
+        {
+          header: 'Δ Cost',
+          align: 'right',
+          width: 12,
+          priority: 1,
+          render: r => renderDelta(r.deltaPercent, useColor),
+        },
+      ],
+      trends,
+      { useColor }
+    )
+  )
 
   lines.push('')
   return lines.join('\n')

@@ -12,6 +12,53 @@ param(
     [switch]$Help
 )
 
+# --- Remote bootstrap: detect piped execution (irm | iex) ---
+# When piped, $MyInvocation.MyCommand.Path is empty — no local repo files exist.
+# Download the latest release archive and re-invoke from the extracted dir.
+if (-not $MyInvocation.MyCommand.Path) {
+    $Repo = "bulga138/token-accumulator-counter-opencode"
+    $ApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
+
+    try {
+        Write-Host "Fetching latest TACO release..."
+        $Release = Invoke-RestMethod -Uri $ApiUrl -ErrorAction Stop
+        $LatestTag = $Release.tag_name
+    } catch {
+        Write-Host "Error: Could not determine latest release from GitHub" -ForegroundColor Red
+        exit 1
+    }
+
+    $ArchiveUrl = "https://github.com/$Repo/releases/download/$LatestTag/taco-release-$LatestTag.tar.gz"
+    $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) "taco-install-$(Get-Random)"
+    New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+
+    try {
+        Write-Host "Downloading TACO $LatestTag..."
+        $ArchivePath = Join-Path $TempDir "taco-release.tar.gz"
+        Invoke-WebRequest -Uri $ArchiveUrl -OutFile $ArchivePath -ErrorAction Stop
+
+        if (Get-Command tar -ErrorAction SilentlyContinue) {
+            tar -xzf $ArchivePath -C $TempDir
+        } else {
+            Write-Host "Error: 'tar' not found. Please install tar or use PowerShell 7+." -ForegroundColor Red
+            exit 1
+        }
+
+        $ExtractedScript = Join-Path $TempDir "install.ps1"
+        if (Test-Path $ExtractedScript) {
+            $ScriptArgs = @()
+            if ($System) { $ScriptArgs += "-System" }
+            & $ExtractedScript @ScriptArgs
+        } else {
+            Write-Host "Error: install.ps1 not found in downloaded archive" -ForegroundColor Red
+            exit 1
+        }
+    } finally {
+        Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    exit $LASTEXITCODE
+}
+
 if ($Help) {
     Write-Host @"
 Usage: .\install.ps1 [OPTIONS]
@@ -41,6 +88,61 @@ function Info { param($msg) Write-Host "${Cyan}  ->${Reset} $msg" }
 function Success { param($msg) Write-Host "${Green}  [OK]${Reset} $msg" }
 function Warn { param($msg) Write-Host "${Yellow}  [WARN]${Reset} $msg" }
 function Error { param($msg) Write-Host "${Red}  [ERROR]${Reset} $msg" -ForegroundColor Red; exit 1 }
+
+# Offer to install Bun if not already present
+function Prompt-InstallBun {
+    # Already installed — nothing to do
+    if (Get-Command bun -ErrorAction SilentlyContinue) { return }
+
+    # Non-interactive — skip silently
+    if (-not [Environment]::UserInteractive) { return }
+
+    Write-Host ""
+    Write-Host "${Bold}Bun not detected${Reset}"
+    Write-Host "Bun provides faster startup and built-in SQLite (no native compilation needed)."
+    Write-Host ""
+    $InstallBun = Read-Host "Would you like to install Bun? [Y/n]"
+    if ([string]::IsNullOrWhiteSpace($InstallBun)) { $InstallBun = "Y" }
+
+    if ($InstallBun -notmatch '^[Yy]$') {
+        Info "Skipping Bun installation — continuing with Node.js"
+        return
+    }
+
+    Write-Host ""
+    Write-Host "${Bold}Choose install method:${Reset}"
+    Write-Host "  1) irm bun.sh/install.ps1 | iex  (Recommended)"
+    Write-Host "  2) npm install -g bun"
+    $BunMethod = Read-Host "Select [1/2]"
+    if ([string]::IsNullOrWhiteSpace($BunMethod)) { $BunMethod = "1" }
+
+    try {
+        switch ($BunMethod) {
+            "1" { Invoke-Expression "& ([scriptblock]::Create((Invoke-RestMethod 'https://bun.sh/install.ps1')))" }
+            "2" { npm install -g bun }
+            default { Warn "Invalid choice — skipping Bun install"; return }
+        }
+    } catch {
+        Warn "Bun installation encountered an error — continuing with Node.js"
+        Warn "You can install Bun manually: https://bun.com/docs/installation"
+        return
+    }
+
+    # Add freshly-installed Bun to current session PATH so runtime detection finds it
+    $BunBinPath = "$env:USERPROFILE\.bun\bin"
+    if (Test-Path $BunBinPath) {
+        $env:PATH = "$BunBinPath;$env:PATH"
+    }
+
+    # Verify
+    if (Get-Command bun -ErrorAction SilentlyContinue) {
+        $BunVer = & bun --version 2>$null
+        Success "Bun $BunVer installed successfully"
+    } else {
+        Warn "Bun installation may have failed — continuing with Node.js"
+        Warn "You can install Bun manually: https://bun.com/docs/installation"
+    }
+}
 
 Write-Host ""
 Write-Host "${Bold}🌮 Installing TACO${Reset}"
@@ -84,6 +186,9 @@ if ($NodeMajor -lt 18) {
 
 Success "Node.js $NodeVersion detected"
 
+# Offer Bun installation
+Prompt-InstallBun
+
 # Determine install directory
 if ($System) {
     $InstallDir = "C:\Program Files\taco"
@@ -93,15 +198,19 @@ if ($System) {
 
 Info "Installation directory: $InstallDir"
 
-# Check for pre-built dist
-if (-not (Test-Path "$ScriptDir\dist")) {
-    Warn "No pre-built dist/ folder found"
+# Build from source
+# Always rebuild when running from a repo checkout (tsconfig.json present).
+# This prevents the stale-install problem where dist/ exists from a previous
+# build but the source has since been edited — the old guard
+# `-not (Test-Path dist)` would silently copy stale compiled output.
+# If running from a pre-built release archive (no tsconfig.json), use the
+# dist/ that shipped with the archive, failing if it is missing.
+if (Test-Path "$ScriptDir\tsconfig.json") {
     Info "Building from source..."
-    
-    # Check for pnpm or npm
+
     $PnpmCmd = Get-Command pnpm -ErrorAction SilentlyContinue
-    $NpmCmd = Get-Command npm -ErrorAction SilentlyContinue
-    
+    $NpmCmd  = Get-Command npm  -ErrorAction SilentlyContinue
+
     if ($PnpmCmd) {
         $BuildCmd = "pnpm run build"
     } elseif ($NpmCmd) {
@@ -109,7 +218,7 @@ if (-not (Test-Path "$ScriptDir\dist")) {
     } else {
         Error "Neither pnpm nor npm found. Please install pnpm: https://pnpm.io/installation"
     }
-    
+
     Push-Location $ScriptDir
     try {
         Invoke-Expression $BuildCmd
@@ -118,6 +227,8 @@ if (-not (Test-Path "$ScriptDir\dist")) {
         Pop-Location
     }
     Success "Built successfully"
+} elseif (-not (Test-Path "$ScriptDir\dist")) {
+    Error "No dist/ folder and no source to build from. Please build first: pnpm run build"
 }
 
 # Install
@@ -165,11 +276,17 @@ $RunCmd '$InstallDir\dist\bin\taco.js' @args
 exec $RunCmd "$InstallDir/dist/bin/taco.js" "`$@"
 "@ | Set-Content -Path $TacoSh -Encoding UTF8
 
-# Copy dist folder
+# Remove stale dist before copying so no old compiled files survive a rename/delete.
+if (Test-Path "$InstallDir\dist") {
+    Remove-Item -Path "$InstallDir\dist" -Recurse -Force
+}
 Copy-Item -Path "$ScriptDir\dist" -Destination $InstallDir -Recurse -Force
 
-# Copy package.json and install dependencies
+# Copy package.json, uninstall script, and install dependencies
 Copy-Item -Path "$ScriptDir\package.json" -Destination $InstallDir -Force
+if (Test-Path "$ScriptDir\uninstall.sh") {
+    Copy-Item -Path "$ScriptDir\uninstall.sh" -Destination $InstallDir -Force
+}
 Info "Installing dependencies..."
 Push-Location $InstallDir
 try {
@@ -226,14 +343,49 @@ Write-Host "  !taco sessions     # Recent sessions"
 Write-Host "  !taco view         # Full dashboard"
 Write-Host ""
 
-# Verify
-$TacoInPath = Get-Command taco -ErrorAction SilentlyContinue
-if ($TacoInPath) {
-    $Version = & taco --version 2>$null
-    if ($Version) {
-        Success "You're all set!"
+# --- Post-install verification ---
+Write-Host ""
+Write-Host "${Bold}Post-install verification${Reset}"
+
+$TacoExe = "$InstallDir\taco.cmd"
+if (Test-Path $TacoExe) {
+    try {
+        # Capture the output as a single string
+        $RawVersionOutput = (& $TacoExe --version 2>$null) | Out-String
+        # Use Regex to find the version number (e.g., v0.1.1)
+        if ($RawVersionOutput -match 'v(\d+\.\d+\.\d+)') {
+            $TacoVersion = $matches[1]
+            Success "taco v$TacoVersion is working"
+        } else {
+            Warn "taco installed but --version check failed"
+        }
+    } catch {
+        Warn "Could not run taco wrapper at $TacoExe"
     }
 } else {
+    Warn "taco wrapper not found at $TacoExe"
+}
+
+if (Get-Command bun -ErrorAction SilentlyContinue) {
+    $BunVer = & bun --version 2>$null
+    Info "Runtime: Bun $BunVer"
+} else {
+    $NodeVer = & node --version 2>$null
+    Info "Runtime: Node.js $NodeVer"
+}
+
+# Warm the cache so the first real 'taco' run is instant.
+# 'overview --format json' is the only command that writes the heatmap cache and
+# takes the lightest code path (single SQLite aggregation, no streaming).
+Info "Warming cache..."
+try {
+    & $TacoExe overview --format json 2>&1 | Out-Null
+    Success "Cache ready"
+} catch {
+    # Non-fatal — cache will be built on first use
+}
+
+if (-not (Get-Command taco -ErrorAction SilentlyContinue)) {
     Info "Restart your terminal, then try: taco"
 }
 

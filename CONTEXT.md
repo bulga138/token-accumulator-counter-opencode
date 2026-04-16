@@ -2,7 +2,7 @@
 
 **Token Accumulator Counter for OpenCode** 🌮
 
-**Version:** 0.1.0  
+**Version:** 0.1.1  
 **Last Updated:** April 16, 2026
 
 ---
@@ -21,9 +21,7 @@ TACO reads OpenCode's SQLite database directly using multiple database drivers f
 
 **Database locations:**
 
-- macOS: `~/Library/Application Support/opencode/opencode.db`
-- Linux: `~/.local/share/opencode/opencode.db`
-- Windows: `~/.local/share/opencode/opencode.db` (XDG path, same as Linux)
+- All platforms: `~/.local/share/opencode/opencode.db` (XDG path, same as Linux)
 
 ## Usage
 
@@ -51,8 +49,14 @@ The `!` prefix runs commands locally without sending data to the AI.
 
 ## Installation
 
+**macOS / Linux:**
 ```bash
-curl -sSL https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/main/install.ps1 | iex
 ```
 
 Or download from GitHub releases.
@@ -91,7 +95,6 @@ token-accumulator-counter-opencode/
 │   ├── config/              # Configuration management
 │   ├── data/                # Database queries (multi-driver)
 │   ├── format/              # Output formatting (visual, JSON, CSV, markdown)
-│   ├── plugin/              # OpenCode plugin integration
 │   └── utils/               # Helper functions
 ├── tests/                   # Unit tests (Vitest)
 ├── dist/                    # Compiled JavaScript

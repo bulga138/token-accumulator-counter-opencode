@@ -197,9 +197,11 @@ info "Installing to: $INSTALL_DIR"
 if [[ -d "$TEMP_DIR/dist" ]]; then
   rm -rf "$INSTALL_DIR/dist"
   cp -r "$TEMP_DIR/dist" "$INSTALL_DIR/"
+  chmod +x "$INSTALL_DIR/dist/bin/taco.js" 2>/dev/null || true
 elif [[ -d "$TEMP_DIR/taco/dist" ]]; then
   rm -rf "$INSTALL_DIR/dist"
   cp -r "$TEMP_DIR/taco/dist" "$INSTALL_DIR/"
+  chmod +x "$INSTALL_DIR/dist/bin/taco.js" 2>/dev/null || true
 fi
 
 # Copy wrapper script if present

@@ -1,5 +1,6 @@
 import { stringify } from 'csv-stringify/sync'
 import type {
+  OverviewStats,
   ModelStats,
   ProviderStats,
   AgentStats,
@@ -11,6 +12,30 @@ import type {
 
 function csvStringify(data: object[]): string {
   return stringify(data, { header: true })
+}
+
+export function formatOverviewCsv(stats: OverviewStats): string {
+  return csvStringify([
+    {
+      tokens_total: stats.tokens.total,
+      tokens_input: stats.tokens.input,
+      tokens_output: stats.tokens.output,
+      tokens_cache_read: stats.tokens.cacheRead,
+      tokens_cache_write: stats.tokens.cacheWrite,
+      tokens_reasoning: stats.tokens.reasoning,
+      cost_usd: stats.cost,
+      session_count: stats.sessionCount,
+      message_count: stats.messageCount,
+      active_days: stats.activedays,
+      total_days: stats.totalDays,
+      favorite_model: stats.favoriteModel ?? '',
+      current_streak: stats.currentStreak,
+      longest_streak: stats.longestStreak,
+      most_active_day: stats.mostActiveDay ?? '',
+      longest_session_ms: stats.longestSessionMs,
+      avg_cost_per_day: stats.avgCostPerDay,
+    },
+  ])
 }
 
 export function formatModelsCsv(models: ModelStats[]): string {

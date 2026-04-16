@@ -2,6 +2,7 @@ import { readFileSync } from 'fs'
 import { getDefaultDbPath, validateDbPath } from '../utils/platform.js'
 
 let _db: Database | null = null
+let _rawDb: any = null // raw handle for closing
 let _sql: any = null
 let _betterSqlite3: any = null
 let _bunSqlite: any = null
@@ -39,10 +40,18 @@ async function initDatabase(): Promise<{ type: 'bun' | 'better-sqlite3' | 'sql.j
   if (!_betterSqlite3) {
     try {
       const betterSqlite3 = await import('better-sqlite3')
-      _betterSqlite3 = betterSqlite3.default || betterSqlite3
+      const mod = betterSqlite3.default || betterSqlite3
+      // Probe: open an in-memory DB to verify the native binding is functional.
+      // This catches cases where the JS package is installed but the compiled
+      // .node binary is missing or was built for a different Node.js version
+      // (common when better-sqlite3 is an optionalDependency with pnpm on macOS).
+      const testDb = new mod(':memory:')
+      testDb.close()
+      _betterSqlite3 = mod
       return { type: 'better-sqlite3', module: _betterSqlite3 }
     } catch {
-      // better-sqlite3 not available
+      // better-sqlite3 not available or native binding broken — fall through to sql.js
+      _betterSqlite3 = null
     }
   } else {
     return { type: 'better-sqlite3', module: _betterSqlite3 }
@@ -165,15 +174,19 @@ export async function getDbAsync(dbPath?: string): Promise<Database> {
 
   if (type === 'bun') {
     // Bun: opens file directly, no memory loading, fastest
+    const bunDb = new module(path, { readonly: true })
+    _rawDb = bunDb
     _db = createBunWrapper(module, path)
   } else if (type === 'better-sqlite3') {
     // better-sqlite3: opens file directly, no memory loading
     const rawDb = new module(path)
+    _rawDb = rawDb
     _db = createBetterSqlite3Wrapper(rawDb)
   } else {
     // sql.js: must load entire file into memory
     const fileBuffer = readFileSync(path)
     const rawDb = new module.Database(fileBuffer)
+    _rawDb = rawDb
     _db = createSqlJsWrapper(rawDb)
   }
 
@@ -182,11 +195,9 @@ export async function getDbAsync(dbPath?: string): Promise<Database> {
 
 export function closeDb(): void {
   if (_db) {
-    // better-sqlite3 and Bun have close method
-    if ((_db as any)._rawDb?.close) {
-      ;(_db as any)._rawDb.close()
-    }
+    if (_rawDb?.close) _rawDb.close()
     _db = null
+    _rawDb = null
   }
 }
 

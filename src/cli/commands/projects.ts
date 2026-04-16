@@ -9,6 +9,7 @@ import { formatProjectsCsv } from '../../format/csv.js'
 import { formatProjectsMarkdown } from '../../format/markdown.js'
 import { addFilterFlags, buildRangeLabel } from '../filters.js'
 import { getConfig } from '../../config/index.js'
+import type { ProjectStats, SortField } from '../../data/types.js'
 
 export function registerProjectsCommand(program: Command): void {
   const cmd = program
@@ -17,10 +18,12 @@ export function registerProjectsCommand(program: Command): void {
     .alias('proj')
 
   addFilterFlags(cmd)
+    .option('--sort <field>', 'Sort by: cost, tokens, messages (default: cost)')
 
   cmd.action(async opts => {
     const config = getConfig()
     const format = opts.format ?? config.defaultFormat ?? 'visual'
+    const sort = (opts.sort ?? 'cost') as SortField
 
     if (!opts.from && config.defaultRange && config.defaultRange !== 'all') {
       opts.from = config.defaultRange
@@ -29,7 +32,8 @@ export function registerProjectsCommand(program: Command): void {
     const filters = buildFilters(opts)
     const db = await getDbAsync(opts.db ?? config.db)
     const events = loadUsageEvents(db, filters)
-    const stats = computeProjectStats(events)
+    let stats = computeProjectStats(events)
+    stats = sortProjectStats(stats, sort)
     const rangeLabel = buildRangeLabel(opts)
 
     if (format === 'json') {
@@ -42,4 +46,13 @@ export function registerProjectsCommand(program: Command): void {
       process.stdout.write(formatProjects(stats, rangeLabel))
     }
   })
+}
+
+function sortProjectStats(stats: ProjectStats[], sort: SortField): ProjectStats[] {
+  switch (sort) {
+    case 'tokens': return [...stats].sort((a, b) => b.tokens.total - a.tokens.total)
+    case 'messages': return [...stats].sort((a, b) => b.messageCount - a.messageCount)
+    case 'cost':
+    default: return [...stats].sort((a, b) => b.cost - a.cost)
+  }
 }

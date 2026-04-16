@@ -1,16 +1,20 @@
 import chalk from 'chalk'
 
-const BAR_WIDTH = 20
+const DEFAULT_BAR_WIDTH = 20
 const BAR_FULL = '█'
 const BAR_EMPTY = ' '
 
 /**
  * Render a proportional bar for a given fraction (0–1).
  * e.g. renderBar(0.712) → "██████████████      "
+ *
+ * @param width - total bar width in visible characters (default 20).
+ *   Pass the column width from the table builder so the bar always fits.
  */
-export function renderBar(fraction: number, useColor: boolean): string {
-  const filled = Math.round(Math.max(0, Math.min(1, fraction)) * BAR_WIDTH)
-  const bar = BAR_FULL.repeat(filled) + BAR_EMPTY.repeat(BAR_WIDTH - filled)
+export function renderBar(fraction: number, useColor: boolean, width = DEFAULT_BAR_WIDTH): string {
+  const w = Math.max(1, width)
+  const filled = Math.round(Math.max(0, Math.min(1, fraction)) * w)
+  const bar = BAR_FULL.repeat(filled) + BAR_EMPTY.repeat(w - filled)
   if (!useColor) return bar
   if (fraction > 0.75) return chalk.red(bar)
   if (fraction > 0.5) return chalk.yellow(bar)

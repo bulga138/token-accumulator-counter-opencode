@@ -4,6 +4,7 @@ import dayjs from 'dayjs'
 import type { DailySeries, ModelStats } from '../data/types.js'
 
 import { formatTokens, formatCost, formatPercent, formatTps } from '../utils/formatting.js'
+import { detectTheme } from '../theme/index.js'
 
 const SERIES_COLORS = [
   asciichart.cyan,
@@ -158,7 +159,12 @@ export function renderModelPanels(
     }
 
     // ── Inline stats row ───────────────────────────────────────────────────
-    const dim = (s: string) => (useColor ? chalk.dim(s) : s)
+    // On light backgrounds chalk.dim makes text nearly invisible; use muted
+    // gray instead, which is readable on both dark and light terminals.
+    const dim = (s: string) => {
+      if (!useColor) return s
+      return detectTheme() === 'light' ? chalk.hex('#757575')(s) : chalk.dim(s)
+    }
     const indent = '  ' + ' '.repeat(Y_LABEL_WIDTH + 2)
 
     const costStr = model.billedExternally ? 'billed via plan' : formatCost(model.cost)

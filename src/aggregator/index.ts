@@ -17,6 +17,20 @@ import type {
 import { emptyTokenSummary, addTokens } from '../data/types.js'
 import { toDateString } from '../utils/dates.js'
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 !== 0 ? (sorted[mid] ?? null) : ((sorted[mid - 1]! + sorted[mid]!) / 2)
+}
+
+function bumpFinish(map: Record<string, number>, finish: string | null): void {
+  const key = finish ?? 'unknown'
+  map[key] = (map[key] ?? 0) + 1
+}
+
 // ─── Overview ─────────────────────────────────────────────────────────────────
 
 export function computeOverview(events: UsageEvent[], sessions: SessionRecord[]): OverviewStats {
@@ -25,6 +39,7 @@ export function computeOverview(events: UsageEvent[], sessions: SessionRecord[])
   const modelSet = new Set<string>()
   const modelCounts: Record<string, number> = {}
   const activeDaySet = new Set<string>()
+  const finishReasons: Record<string, number> = {}
 
   for (const e of events) {
     const t = addTokens(tokens, e.tokens)
@@ -39,6 +54,7 @@ export function computeOverview(events: UsageEvent[], sessions: SessionRecord[])
     modelSet.add(e.modelId)
     modelCounts[e.modelId] = (modelCounts[e.modelId] ?? 0) + 1
     activeDaySet.add(toDateString(e.timeCreated))
+    bumpFinish(finishReasons, e.finish)
   }
 
   // Favorite model = most messages
@@ -101,10 +117,11 @@ export function computeOverview(events: UsageEvent[], sessions: SessionRecord[])
     mostActiveDay,
     longestSessionMs,
     avgCostPerDay,
+    finishReasons,
   }
 }
 
-function computeStreaks(sortedDays: string[]): {
+export function computeStreaks(sortedDays: string[]): {
   currentStreak: number
   longestStreak: number
 } {
@@ -131,7 +148,6 @@ function computeStreaks(sortedDays: string[]): {
 
   let currentStreak = 0
   if (lastDay === today || lastDay === yesterday) {
-    // Walk backwards counting consecutive days
     currentStreak = 1
     for (let i = sortedDays.length - 2; i >= 0; i--) {
       const prev = dayjs(sortedDays[i + 1])
@@ -150,8 +166,6 @@ function computeStreaks(sortedDays: string[]): {
 // ─── Model stats ──────────────────────────────────────────────────────────────
 
 export function computeModelStats(events: UsageEvent[]): ModelStats[] {
-  // Key = modelId + "|||" + providerId so same model via different providers
-  // stays as separate entries (different billing, different costs).
   const map = new Map<
     string,
     {
@@ -159,12 +173,13 @@ export function computeModelStats(events: UsageEvent[]): ModelStats[] {
       providerId: string
       tokens: TokenSummary
       cost: number
-      hasCost: boolean // true if at least one event recorded a non-zero cost
+      hasCost: boolean
       messageCount: number
       sessions: Set<string>
       activeDays: Set<string>
       tpsSamples: number[]
       dailyTokens: Map<string, number>
+      finishReasons: Record<string, number>
     }
   >()
 
@@ -182,6 +197,7 @@ export function computeModelStats(events: UsageEvent[]): ModelStats[] {
         activeDays: new Set(),
         tpsSamples: [],
         dailyTokens: new Map(),
+        finishReasons: {},
       })
     }
     const s = map.get(key)!
@@ -191,6 +207,7 @@ export function computeModelStats(events: UsageEvent[]): ModelStats[] {
     s.messageCount++
     s.sessions.add(e.sessionId)
     s.activeDays.add(toDateString(e.timeCreated))
+    bumpFinish(s.finishReasons, e.finish)
 
     if (e.timeCompleted && e.timeCreated && e.tokens.output > 0) {
       const durationSec = (e.timeCompleted - e.timeCreated) / 1000
@@ -223,6 +240,7 @@ export function computeModelStats(events: UsageEvent[]): ModelStats[] {
       percentage: totalTokens > 0 ? v.tokens.total / totalTokens : 0,
       medianOutputTps: median(v.tpsSamples),
       dailySeries,
+      finishReasons: v.finishReasons,
     })
   }
 
@@ -424,6 +442,7 @@ export function computeSessionStats(
       cost: number
       messageCount: number
       models: Set<string>
+      finishReasons: Record<string, number>
     }
   >()
 
@@ -435,6 +454,7 @@ export function computeSessionStats(
         cost: 0,
         messageCount: 0,
         models: new Set(),
+        finishReasons: {},
       })
     }
     const s = map.get(key)!
@@ -442,6 +462,7 @@ export function computeSessionStats(
     s.cost += e.cost
     s.messageCount++
     s.models.add(e.modelId)
+    bumpFinish(s.finishReasons, e.finish)
   }
 
   const result: SessionStats[] = []
@@ -460,6 +481,7 @@ export function computeSessionStats(
           ? session.timeUpdated - session.timeCreated
           : null,
       models: Array.from(v.models),
+      finishReasons: v.finishReasons,
     })
   }
 
@@ -475,7 +497,6 @@ export function computeTrends(
 ): PeriodStats[] {
   const now = dayjs()
 
-  // Build period buckets from newest to oldest
   const buckets: Array<{
     label: string
     start: string
@@ -498,7 +519,6 @@ export function computeTrends(
       endDate = weekStart.add(6, 'day').endOf('day')
       label = `${weekStart.format('MMM D')} – ${endDate.format('MMM D')}`
     } else {
-      // month
       const m = now.subtract(i, 'month')
       startDate = m.startOf('month')
       endDate = m.endOf('month')
@@ -512,7 +532,6 @@ export function computeTrends(
     })
   }
 
-  // Aggregate events into buckets
   const results: PeriodStats[] = buckets.map(b => {
     const periodEvents = events.filter(e => {
       const d = toDateString(e.timeCreated)
@@ -549,14 +568,13 @@ export function computeTrends(
     }
   })
 
-  // Compute deltas (vs. next older period)
   for (let i = 0; i < results.length - 1; i++) {
-    const curr = results[i]
-    const prev = results[i + 1]
+    const curr = results[i]!
+    const prev = results[i + 1]!
     if (prev.cost > 0) {
       curr.deltaPercent = (curr.cost - prev.cost) / prev.cost
     } else if (curr.cost > 0) {
-      curr.deltaPercent = 1 // 100% increase from zero
+      curr.deltaPercent = 1
     } else {
       curr.deltaPercent = 0
     }
@@ -574,7 +592,6 @@ export interface HeatmapDay {
 }
 
 export function computeHeatmap(events: UsageEvent[]): HeatmapDay[] {
-  // Aggregate tokens per day
   const dayTokens = new Map<string, number>()
   for (const e of events) {
     const d = toDateString(e.timeCreated)
@@ -582,8 +599,6 @@ export function computeHeatmap(events: UsageEvent[]): HeatmapDay[] {
   }
 
   const maxTokens = Math.max(0, ...dayTokens.values())
-
-  // Build 365-day grid
   const today = dayjs()
   const days: HeatmapDay[] = []
 
@@ -606,22 +621,18 @@ export function computeHeatmap(events: UsageEvent[]): HeatmapDay[] {
   return days
 }
 
-// Memory-efficient version that works with pre-aggregated daily data
 export interface DailyAggregate {
   date: string
   tokens: number
 }
 
 export function computeHeatmapFromAggregates(aggregates: DailyAggregate[]): HeatmapDay[] {
-  // Build a map from the aggregates
   const dayTokens = new Map<string, number>()
   for (const agg of aggregates) {
     dayTokens.set(agg.date, agg.tokens)
   }
 
   const maxTokens = Math.max(0, ...dayTokens.values())
-
-  // Build 365-day grid
   const today = dayjs()
   const days: HeatmapDay[] = []
 
@@ -644,11 +655,36 @@ export function computeHeatmapFromAggregates(aggregates: DailyAggregate[]): Heat
   return days
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+/**
+ * Build a compact HeatmapDay[] for the last `numDays` days.
+ * Intensity is scaled relative to the max within the window.
+ */
+export function computeMiniHeatmap(aggregates: DailyAggregate[], numDays = 30): HeatmapDay[] {
+  const dayTokens = new Map<string, number>()
+  for (const agg of aggregates) {
+    dayTokens.set(agg.date, agg.tokens)
+  }
 
-function median(values: number[]): number | null {
-  if (values.length === 0) return null
-  const sorted = [...values].sort((a, b) => a - b)
-  const mid = Math.floor(sorted.length / 2)
-  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+  const today = dayjs()
+  const days: HeatmapDay[] = []
+
+  for (let i = numDays - 1; i >= 0; i--) {
+    const date = today.subtract(i, 'day').format('YYYY-MM-DD')
+    const tokens = dayTokens.get(date) ?? 0
+    days.push({ date, tokens, intensity: 0 })
+  }
+
+  const maxTokens = Math.max(0, ...days.map(d => d.tokens))
+
+  for (const d of days) {
+    if (d.tokens > 0 && maxTokens > 0) {
+      const ratio = d.tokens / maxTokens
+      if (ratio < 0.25) d.intensity = 1
+      else if (ratio < 0.5) d.intensity = 2
+      else if (ratio < 0.75) d.intensity = 3
+      else d.intensity = 4
+    }
+  }
+
+  return days
 }

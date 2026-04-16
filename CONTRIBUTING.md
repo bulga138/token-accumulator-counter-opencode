@@ -88,7 +88,6 @@ pnpm run format:check  # Check formatting without fixing
 │   ├── config/       # Configuration management
 │   ├── data/         # Database queries and types
 │   ├── format/       # Output formatting (visual, JSON, etc.)
-│   ├── plugin/       # OpenCode plugin integration
 │   └── utils/        # Utilities
 ├── tests/            # Test files
 └── dist/             # Compiled output (generated)

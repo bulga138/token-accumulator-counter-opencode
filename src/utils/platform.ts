@@ -47,9 +47,15 @@ export function getDefaultDbPath(): string {
 export function validateDbPath(dbPath: string): void {
   if (!existsSync(dbPath)) {
     throw new Error(
-      `OpenCode database not found at: ${dbPath}\n` +
-        `Make sure OpenCode is installed and has been run at least once.\n` +
-        `You can override the path with --db <path> or $OPENCODE_DB env var.`
+      [
+        `OpenCode database not found at: ${dbPath}`,
+        '',
+        'Possible fixes:',
+        '  1. Install and run OpenCode at least once  →  https://opencode.ai',
+        '  2. Override for this run:    taco --db /path/to/opencode.db',
+        '  3. Set path permanently:     taco config set db /path/to/opencode.db',
+        '  4. Or via environment var:   export OPENCODE_DB=/path/to/opencode.db',
+      ].join('\n')
     )
   }
 }

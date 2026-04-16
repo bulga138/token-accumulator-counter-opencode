@@ -1,6 +1,6 @@
 {
   "name": "token-accumulator-counter-opencode",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "🌮 TACO — Token Accumulator Counter for OpenCode. Analyze and visualize your AI coding session usage across dates, models, and projects.",
   "keywords": [
     "opencode",
@@ -21,8 +21,7 @@
   },
   "main": "./dist/src/index.js",
   "exports": {
-    ".": "./dist/src/index.js",
-    "./plugin": "./dist/src/plugin/index.js"
+    ".": "./dist/src/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -39,6 +38,7 @@
     "format": "prettier --write \"src/**/*.ts\" \"bin/**/*.ts\" \"tests/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"bin/**/*.ts\" \"tests/**/*.ts\"",
     "bundle": "bun build ./bin/taco.ts --outfile ./taco --compile",
+    "dev:install": "tsc && node -e \"const fs=require('fs'),p=require('path'),os=require('os');const d=p.join(os.homedir(),'.taco','dist');fs.rmSync(d,{recursive:true,force:true});fs.cpSync('dist',d,{recursive:true});console.log('Installed to '+d)\"",
     "prepublishOnly": "npm run build && npm test"
   },
   "dependencies": {
@@ -65,14 +65,7 @@
     "typescript": "5.8.2",
     "vitest": "4.1.4"
   },
-  "peerDependencies": {
-    "@opencode-ai/plugin": "*"
-  },
-  "peerDependenciesMeta": {
-    "@opencode-ai/plugin": {
-      "optional": true
-    }
-  },
+
   "engines": {
     "node": ">=18.0.0"
   },

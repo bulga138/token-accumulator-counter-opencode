@@ -171,3 +171,49 @@ function buildMonthRow(
   const plain = buf.join('')
   return useColor ? plain.replace(/[A-Z][a-z]{2}/g, m => chalk.bold(m)) : plain
 }
+
+// ─── Mini heatmap (variable length, no month header) ─────────────────────────
+
+/**
+ * Compact heatmap for short windows (e.g. last 30 days).
+ *
+ * Unlike `renderHeatmap()` this accepts any number of days, skips the month
+ * header (too sparse at 4-5 weeks), and uses the same Mon-Fri cell grid.
+ * Suitable for TUI sidebars and summary panels.
+ */
+export function renderMiniHeatmap(days: HeatmapDay[], useColor: boolean): string[] {
+  if (days.length === 0) return []
+
+  const firstDow = dayjs(days[0]!.date).day() // 0 = Sunday
+
+  // Pad front so columns align on Sunday-week boundaries
+  const padded: (HeatmapDay | null)[] = [...Array<null>(firstDow).fill(null), ...days]
+  const numWeeks = Math.ceil(padded.length / 7)
+
+  // Build one row per weekday (Mon … Fri)
+  const rows: (HeatmapDay | null)[][] = WEEKDAY_DOWS.map(dow =>
+    Array.from({ length: numWeeks }, (_, w) => padded[w * 7 + dow] ?? null)
+  )
+
+  const lines: string[] = []
+
+  for (let r = 0; r < WEEKDAY_LABELS.length; r++) {
+    const label = WEEKDAY_LABELS[r]!
+    const cells = rows[r]!.map(d => shadeCell(d, useColor)).join('')
+    lines.push(`${label}  ${cells}`)
+  }
+
+  // Legend
+  const [s0, s1, s2, s3, s4] = useColor
+    ? [
+        chalk.dim('·'),
+        chalk.green('░'),
+        chalk.greenBright('▒'),
+        chalk.yellow('▓'),
+        chalk.bold.yellow('█'),
+      ]
+    : ['·', '░', '▒', '▓', '█']
+  lines.push(`${' '.repeat(GUTTER)}${s0} no activity  ${s1}${s2}${s3}${s4} low → high`)
+
+  return lines
+}

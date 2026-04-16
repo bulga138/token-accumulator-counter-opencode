@@ -43,6 +43,7 @@ export function formatTps(tps: number): string {
 
 /**
  * Pad a string to a given length (right-padding with spaces).
+ * Does NOT truncate — use truncate() before calling if you need to clamp.
  */
 export function padEnd(str: string, len: number): string {
   return str.length >= len ? str : str + ' '.repeat(len - str.length)
@@ -50,6 +51,7 @@ export function padEnd(str: string, len: number): string {
 
 /**
  * Pad a string to a given length (left-padding with spaces).
+ * Does NOT truncate — use truncate() before calling if you need to clamp.
  */
 export function padStart(str: string, len: number): string {
   return str.length >= len ? str : ' '.repeat(len - str.length) + str

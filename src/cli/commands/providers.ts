@@ -9,6 +9,7 @@ import { formatProvidersCsv } from '../../format/csv.js'
 import { formatProviderMarkdown } from '../../format/markdown.js'
 import { addFilterFlags, buildRangeLabel } from '../filters.js'
 import { getConfig } from '../../config/index.js'
+import type { ProviderStats, SortField } from '../../data/types.js'
 
 export function registerProvidersCommand(program: Command): void {
   const cmd = program
@@ -17,10 +18,12 @@ export function registerProvidersCommand(program: Command): void {
     .alias('p')
 
   addFilterFlags(cmd)
+    .option('--sort <field>', 'Sort by: cost, tokens, messages (default: tokens)')
 
   cmd.action(async opts => {
     const config = getConfig()
     const format = opts.format ?? config.defaultFormat ?? 'visual'
+    const sort = (opts.sort ?? 'tokens') as SortField
 
     if (!opts.from && config.defaultRange && config.defaultRange !== 'all') {
       opts.from = config.defaultRange
@@ -29,7 +32,8 @@ export function registerProvidersCommand(program: Command): void {
     const filters = buildFilters(opts)
     const db = await getDbAsync(opts.db ?? config.db)
     const events = loadUsageEvents(db, filters)
-    const stats = computeProviderStats(events)
+    let stats = computeProviderStats(events)
+    stats = sortProviderStats(stats, sort)
     const rangeLabel = buildRangeLabel(opts)
 
     if (format === 'json') {
@@ -42,4 +46,13 @@ export function registerProvidersCommand(program: Command): void {
       process.stdout.write(formatProviders(stats, rangeLabel))
     }
   })
+}
+
+function sortProviderStats(stats: ProviderStats[], sort: SortField): ProviderStats[] {
+  switch (sort) {
+    case 'cost': return [...stats].sort((a, b) => b.cost - a.cost)
+    case 'messages': return [...stats].sort((a, b) => b.messageCount - a.messageCount)
+    case 'tokens':
+    default: return [...stats].sort((a, b) => b.tokens.total - a.tokens.total)
+  }
 }

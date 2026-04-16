@@ -13,6 +13,34 @@
 
 set -euo pipefail
 
+# --- Remote bootstrap: detect piped execution (curl | bash) ---
+# When piped, BASH_SOURCE[0] is empty — no local repo files exist.
+# Download the latest release archive and re-exec from the extracted dir.
+if [[ -z "${BASH_SOURCE[0]:-}" ]] || [[ "${BASH_SOURCE[0]}" == "bash" ]]; then
+  REPO="bulga138/token-accumulator-counter-opencode"
+  GITHUB_API="https://api.github.com/repos/${REPO}/releases/latest"
+
+  command -v curl &>/dev/null || { echo "Error: curl is required"; exit 1; }
+  command -v tar  &>/dev/null || { echo "Error: tar is required"; exit 1; }
+
+  echo "Fetching latest TACO release..."
+  LATEST_TAG=$(curl -fsSL "$GITHUB_API" | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
+  if [[ -z "$LATEST_TAG" ]]; then
+    echo "Error: Could not determine latest release from GitHub"
+    exit 1
+  fi
+
+  ARCHIVE_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/taco-release-${LATEST_TAG}.tar.gz"
+  TEMP_DIR=$(mktemp -d)
+  trap 'rm -rf "$TEMP_DIR"' EXIT
+
+  echo "Downloading TACO ${LATEST_TAG}..."
+  curl -fsSL "$ARCHIVE_URL" | tar xz -C "$TEMP_DIR"
+
+  # Re-exec from the extracted archive — BASH_SOURCE[0] will be a real path
+  exec bash "$TEMP_DIR/install.sh" "$@"
+fi
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Colors ---
@@ -31,6 +59,86 @@ info()    { echo -e "${CYAN}  ->${RESET} $*"; }
 success() { echo -e "${GREEN}  [OK]${RESET} $*"; }
 warn()    { echo -e "${YELLOW}  [WARN]${RESET} $*"; }
 error()   { echo -e "${RED}  [ERROR]${RESET} $*" >&2; exit 1; }
+
+# Offer to install Bun if not already present
+prompt_install_bun() {
+  # Already installed — nothing to do
+  command -v bun &>/dev/null && return 0
+
+  # Non-interactive (e.g. curl | bash) — skip silently
+  [[ -t 0 ]] || return 0
+
+  echo ""
+  echo -e "${BOLD}Bun not detected${RESET}"
+  echo -e "Bun provides faster startup and built-in SQLite (no native compilation needed)."
+  echo ""
+  read -rp "Would you like to install Bun? [Y/n] " INSTALL_BUN
+  INSTALL_BUN="${INSTALL_BUN:-Y}"
+
+  if [[ ! "$INSTALL_BUN" =~ ^[Yy]$ ]]; then
+    info "Skipping Bun installation — continuing with Node.js"
+    return 0
+  fi
+
+  echo ""
+  echo -e "${BOLD}Choose install method:${RESET}"
+
+  case "$OS" in
+    macos)
+      echo "  1) brew install oven-sh/bun/bun  (Recommended)"
+      echo "  2) curl -fsSL https://bun.com/install | bash"
+      echo "  3) npm install -g bun"
+      read -rp "Select [1/2/3]: " BUN_METHOD
+      BUN_METHOD="${BUN_METHOD:-1}"
+      case "$BUN_METHOD" in
+        1) brew install oven-sh/bun/bun ;;
+        2) curl -fsSL https://bun.com/install | bash ;;
+        3) npm install -g bun ;;
+        *) warn "Invalid choice — skipping Bun install"; return 0 ;;
+      esac
+      ;;
+    linux)
+      echo "  1) curl -fsSL https://bun.com/install | bash  (Recommended)"
+      echo "  2) npm install -g bun"
+      read -rp "Select [1/2]: " BUN_METHOD
+      BUN_METHOD="${BUN_METHOD:-1}"
+      case "$BUN_METHOD" in
+        1) curl -fsSL https://bun.com/install | bash ;;
+        2) npm install -g bun ;;
+        *) warn "Invalid choice — skipping Bun install"; return 0 ;;
+      esac
+      ;;
+    windows)
+      echo "  1) PowerShell installer  (Recommended)"
+      echo "  2) npm install -g bun"
+      read -rp "Select [1/2]: " BUN_METHOD
+      BUN_METHOD="${BUN_METHOD:-1}"
+      case "$BUN_METHOD" in
+        1) powershell -c "irm bun.sh/install.ps1|iex" ;;
+        2) npm install -g bun ;;
+        *) warn "Invalid choice — skipping Bun install"; return 0 ;;
+      esac
+      ;;
+    *)
+      warn "Unknown OS — skipping Bun install"
+      return 0
+      ;;
+  esac
+
+  # Add freshly-installed Bun to current session PATH so runtime detection finds it
+  if [[ -d "$HOME/.bun/bin" ]]; then
+    export BUN_INSTALL="$HOME/.bun"
+    export PATH="$BUN_INSTALL/bin:$PATH"
+  fi
+
+  # Verify
+  if command -v bun &>/dev/null; then
+    success "Bun $(bun --version) installed successfully"
+  else
+    warn "Bun installation may have failed — continuing with Node.js"
+    warn "You can install Bun manually: https://bun.com/docs/installation"
+  fi
+}
 
 echo ""
 echo -e "${BOLD}🌮 Installing TACO${RESET}"
@@ -98,6 +206,9 @@ fi
 
 success "Node.js $NODE_VERSION detected"
 
+# --- Offer Bun installation ---
+prompt_install_bun
+
 # --- Determine installation directory ---
 if [[ "$SYSTEM" == "true" ]]; then
   if [[ "$OS" == "windows" ]]; then
@@ -110,12 +221,16 @@ else
   INSTALL_DIR="${HOME}/.taco"
 fi
 
-# --- Check for pre-built dist ---
-if [[ ! -d "$REPO_DIR/dist" ]]; then
-  warn "No pre-built dist/ folder found"
+# --- Build from source ---
+# Always rebuild when running from a repo checkout (tsconfig.json present).
+# This prevents the stale-install problem where dist/ exists from a previous
+# build but the source has since been edited — the old guard
+# `if [[ ! -d dist ]]` would silently copy stale compiled output.
+# If we're running from a pre-built release archive (no tsconfig.json), fall
+# back to using the dist/ that came with the archive, failing if it's missing.
+if [[ -f "$REPO_DIR/tsconfig.json" ]]; then
   info "Building from source..."
-  
-  # Check for pnpm
+
   if ! command -v pnpm &> /dev/null; then
     warn "pnpm not found, trying npm..."
     if ! command -v npm &> /dev/null; then
@@ -125,10 +240,12 @@ if [[ ! -d "$REPO_DIR/dist" ]]; then
   else
     BUILD_CMD="pnpm run build"
   fi
-  
+
   cd "$REPO_DIR"
   $BUILD_CMD || error "Build failed"
   success "Built successfully"
+elif [[ ! -d "$REPO_DIR/dist" ]]; then
+  error "No dist/ folder and no source to build from. Please build first: pnpm run build"
 fi
 
 # --- Install ---
@@ -173,8 +290,14 @@ exec $RUNCMD "$INSTALL_DIR/dist/bin/taco.js" "\$@"
 EOF
   chmod +x "$TACO_WRAPPER"
   
-  # Copy dist folder
+  # Remove stale dist before copying so no old compiled files survive a rename/delete.
+  rm -rf "$INSTALL_DIR/dist"
   cp -r "$REPO_DIR/dist" "$INSTALL_DIR/"
+  chmod +x "$INSTALL_DIR/dist/bin/taco.js" 2>/dev/null || true
+  if [[ -f "$REPO_DIR/uninstall.sh" ]]; then
+    cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/"
+    chmod +x "$INSTALL_DIR/uninstall.sh"
+  fi
   
   success "Installed to $INSTALL_DIR/taco.bat, taco.ps1, and taco (shell)"
 else
@@ -185,14 +308,30 @@ exec $RUNCMD "$INSTALL_DIR/dist/bin/taco.js" "\$@"
 EOF
   chmod +x "$TACO_WRAPPER"
   
-  # Copy dist folder
+  # Remove stale dist before copying so no old compiled files survive a rename/delete.
+  rm -rf "$INSTALL_DIR/dist"
   cp -r "$REPO_DIR/dist" "$INSTALL_DIR/"
-  
-  # Copy package.json and install dependencies
+  chmod +x "$INSTALL_DIR/dist/bin/taco.js" 2>/dev/null || true
+
+  # Copy package.json, uninstall script, and install dependencies
   cp "$REPO_DIR/package.json" "$INSTALL_DIR/"
+  if [[ -f "$REPO_DIR/uninstall.sh" ]]; then
+    cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/"
+    chmod +x "$INSTALL_DIR/uninstall.sh"
+  fi
   info "Installing dependencies..."
   (cd "$INSTALL_DIR" && npm install --omit=dev --silent) || warn "Failed to install dependencies, TACO may not work properly"
-  
+
+  # Verify SQLite driver availability (better-sqlite3 is optional — native build may fail)
+  if [ "$RUNTIME" = "node" ]; then
+    if node -e "const m = require('better-sqlite3'); const db = new m(':memory:'); db.close()" 2>/dev/null; then
+      info "SQLite driver: better-sqlite3 (native)"
+    else
+      warn "better-sqlite3 native addon not available — falling back to sql.js (WASM)"
+      warn "This is normal on some systems. TACO will work correctly but may be slightly slower."
+    fi
+  fi
+
   success "Installed to $INSTALL_DIR/taco"
 fi
 
@@ -246,10 +385,34 @@ echo "  !taco sessions     # Recent sessions"
 echo "  !taco view         # Full dashboard"
 echo ""
 
-# Verify installation
-if command -v taco &> /dev/null; then
-  taco --version 2>/dev/null && success "You're all set!"
+# --- Post-install verification ---
+echo ""
+echo -e "${BOLD}Post-install verification${RESET}"
+
+if [[ -x "$INSTALL_DIR/taco" ]]; then
+  TACO_VERSION=$("$INSTALL_DIR/taco" --version 2>/dev/null)
+  if [[ -n "$TACO_VERSION" ]]; then
+    success "taco $TACO_VERSION is working"
+  else
+    warn "taco installed but --version check failed"
+  fi
 else
-  info "Restart your terminal or run: source $SHELL_RC"
+  warn "taco wrapper not found or not executable at $INSTALL_DIR/taco"
+fi
+
+if command -v bun &>/dev/null; then
+  info "Runtime: Bun $(bun --version)"
+else
+  info "Runtime: Node.js $(node --version)"
+fi
+
+# Warm the cache so the first real 'taco' run is instant.
+# 'overview --format json' is the only command that writes ~/.cache/taco/ and
+# takes the lightest code path (single SQLite aggregation, no streaming).
+info "Warming cache..."
+"$INSTALL_DIR/taco" overview --format json >/dev/null 2>&1 && success "Cache ready" || true
+
+if ! command -v taco &>/dev/null; then
+  info "Restart your terminal or run: source ${SHELL_RC:-~/.zshrc}"
   info "Then try: taco"
 fi

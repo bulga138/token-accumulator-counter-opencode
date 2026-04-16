@@ -8,9 +8,10 @@ import {
   streamUsageEvents,
 } from '../../data/queries.js'
 import { buildFilters } from '../../utils/dates.js'
-import { computeHeatmapFromAggregates } from '../../aggregator/index.js'
+import { computeHeatmapFromAggregates, computeStreaks } from '../../aggregator/index.js'
 import { formatOverview } from '../../format/visual.js'
 import { formatOverviewJson } from '../../format/json.js'
+import { formatOverviewCsv } from '../../format/csv.js'
 import { formatOverviewMarkdown } from '../../format/markdown.js'
 import { addFilterFlags, buildRangeLabel } from '../filters.js'
 import { getConfig } from '../../config/index.js'
@@ -19,7 +20,7 @@ import chalk from 'chalk'
 import { readFileSync, writeFileSync, existsSync, statSync, mkdirSync } from 'fs'
 import { join } from 'path'
 import { homedir } from 'os'
-import type { UsageEvent } from '../../data/types.js'
+import type { UsageEvent, SessionRecord } from '../../data/types.js'
 import { emptyTokenSummary, addTokens, DEFAULT_DATE_RANGE_DAYS } from '../../data/types.js'
 import type { DailyAggregate } from '../../data/queries.js'
 
@@ -87,16 +88,20 @@ function saveCachedHeatmap(dbPath: string, fromDate: Date, aggregates: DailyAggr
   }
 }
 
-// Memory-efficient overview computation using streaming
+// Memory-efficient overview computation using streaming.
+// Computes streaks, mostActiveDay, longestSession, and finishReasons
+// so output matches the full computeOverview() in the TUI.
 function computeOverviewStreaming(
   events: Iterable<UsageEvent>,
-  sessions: { sessionCount: number }
+  sessions: SessionRecord[]
 ) {
   const tokens = emptyTokenSummary()
   let cost = 0
   const modelSet = new Set<string>()
   const modelCounts: Record<string, number> = {}
   const activeDaySet = new Set<string>()
+  const dayMessages: Record<string, number> = {}
+  const finishReasons: Record<string, number> = {}
   let messageCount = 0
 
   for (const e of events) {
@@ -112,9 +117,12 @@ function computeOverviewStreaming(
     modelSet.add(e.modelId)
     modelCounts[e.modelId] = (modelCounts[e.modelId] ?? 0) + 1
 
-    // Convert timestamp to date string
-    const date = new Date(e.timeCreated).toISOString().split('T')[0]
+    const date = new Date(e.timeCreated).toISOString().split('T')[0]!
     activeDaySet.add(date)
+    dayMessages[date] = (dayMessages[date] ?? 0) + 1
+
+    const finKey = e.finish ?? 'unknown'
+    finishReasons[finKey] = (finishReasons[finKey] ?? 0) + 1
 
     messageCount++
   }
@@ -129,14 +137,44 @@ function computeOverviewStreaming(
     }
   }
 
+  // Streaks from active day set
+  const sortedDays = Array.from(activeDaySet).sort()
+  const { currentStreak, longestStreak } = computeStreaks(sortedDays)
+
+  // Most active day
+  let mostActiveDay: string | null = null
+  let maxMsgs = 0
+  for (const [day, count] of Object.entries(dayMessages)) {
+    if (count > maxMsgs) {
+      maxMsgs = count
+      mostActiveDay = day
+    }
+  }
+
+  // Longest session
+  let longestSessionMs = 0
+  for (const s of sessions) {
+    const dur = s.timeUpdated - s.timeCreated
+    if (dur > longestSessionMs) longestSessionMs = dur
+  }
+
+  const activeDays = activeDaySet.size
+
   return {
     tokens,
     cost,
-    sessionCount: sessions.sessionCount,
+    sessionCount: sessions.length,
     messageCount,
-    activeDays: activeDaySet.size,
+    activeDays,
     modelsUsed: Array.from(modelSet),
     favoriteModel,
+    currentStreak,
+    longestStreak,
+    mostActiveDay,
+    longestSessionMs,
+    avgCostPerDay: activeDays > 0 ? cost / activeDays : 0,
+    finishReasons,
+    sortedDays,
   }
 }
 
@@ -208,25 +246,46 @@ export function registerOverviewCommand(program: Command): void {
         mostActiveDay: null,
         longestSessionMs: 0,
         avgCostPerDay: 0,
+        finishReasons: {},
       }
 
       process.stdout.write(formatOverviewJson(stats, heatmap) + '\n')
-    } else if (format === 'markdown') {
-      // For markdown, use streaming to compute stats efficiently
+    } else if (format === 'csv') {
       const eventStream = streamUsageEvents(db, filters)
-      const sessionCount = loadSessions(db, filters).length
-      const stats = computeOverviewStreaming(eventStream, { sessionCount })
-
-      // Create a minimal stats object for markdown
+      const sessions = loadSessions(db, filters)
+      const stats = computeOverviewStreaming(eventStream, sessions)
       const fullStats = {
         ...stats,
         activedays: stats.activeDays,
-        totalDays: 1,
-        currentStreak: 0,
-        longestStreak: 0,
-        mostActiveDay: null,
-        longestSessionMs: 0,
-        avgCostPerDay: 0,
+        totalDays: stats.sortedDays.length >= 2
+          ? Math.round(
+              (new Date(stats.sortedDays[stats.sortedDays.length - 1]!).getTime() -
+                new Date(stats.sortedDays[0]!).getTime()) /
+                86_400_000
+            ) + 1
+          : 1,
+      }
+      process.stdout.write(formatOverviewCsv(fullStats) + '\n')
+    } else if (format === 'markdown') {
+      const eventStream = streamUsageEvents(db, filters)
+      const sessions = loadSessions(db, filters)
+      const stats = computeOverviewStreaming(eventStream, sessions)
+
+      // Compute totalDays from sortedDays span
+      let totalDays = 1
+      if (stats.sortedDays.length >= 2) {
+        totalDays =
+          Math.round(
+            (new Date(stats.sortedDays[stats.sortedDays.length - 1]!).getTime() -
+              new Date(stats.sortedDays[0]!).getTime()) /
+              86_400_000
+          ) + 1
+      }
+
+      const fullStats = {
+        ...stats,
+        activedays: stats.activeDays,
+        totalDays,
       }
 
       process.stdout.write(formatOverviewMarkdown(fullStats, rangeLabel) + '\n')
@@ -234,7 +293,7 @@ export function registerOverviewCommand(program: Command): void {
       // Visual (default) - use streaming for memory efficiency
       const eventStream = streamUsageEvents(db, filters)
       const sessions = loadSessions(db, filters)
-      const stats = computeOverviewStreaming(eventStream, { sessionCount: sessions.length })
+      const stats = computeOverviewStreaming(eventStream, sessions)
 
       // Get heatmap data
       const heatmapData = dailyAggregates ?? getDailyAggregates(db, sixMonthsAgo)
@@ -244,22 +303,26 @@ export function registerOverviewCommand(program: Command): void {
       const heatmap = computeHeatmapFromAggregates(heatmapData)
 
       // Daily series for the tokens-over-time chart (filtered range)
-      // Use SQLite-native daily aggregation
       const dailyStats = getDailyAggregates(db, filters.from ?? new Date(0), filters.to)
       const dailySeries = dailyStats
         .map(d => ({ date: d.date, tokens: d.tokens }))
         .sort((a, b) => a.date.localeCompare(b.date))
 
-      // Create full stats object
+      // Compute totalDays from sortedDays span
+      let totalDays = 1
+      if (stats.sortedDays.length >= 2) {
+        totalDays =
+          Math.round(
+            (new Date(stats.sortedDays[stats.sortedDays.length - 1]!).getTime() -
+              new Date(stats.sortedDays[0]!).getTime()) /
+              86_400_000
+          ) + 1
+      }
+
       const fullStats = {
         ...stats,
         activedays: stats.activeDays,
-        totalDays: 1,
-        currentStreak: 0,
-        longestStreak: 0,
-        mostActiveDay: null,
-        longestSessionMs: 0,
-        avgCostPerDay: stats.activeDays > 0 ? stats.cost / stats.activeDays : 0,
+        totalDays,
       }
 
       process.stdout.write(formatOverview(fullStats, heatmap, rangeLabel, dailySeries))

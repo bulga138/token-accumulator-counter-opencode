@@ -9,6 +9,39 @@ import { registerAgentsCommand } from './commands/agents.js'
 import { registerTrendsCommand } from './commands/trends.js'
 import { registerExportCommand } from './commands/export.js'
 import { registerTuiCommand } from './commands/tui.js'
+import { registerTodayCommand } from './commands/today.js'
+import { registerConfigCommand } from './commands/config-cmd.js'
+import packageJson from '../../package.json' with { type: 'json' }
+
+// ── Braille art embedded as a constant
+/* prettier-ignore */
+const TACO_ART = [
+  '⠀⠀⠀⠀⠀⠀⣤⠀⠀⣤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⡀⠀⢠⡄⠀⠀⠀⠀⠀⠀⠀',
+  '⠀⠀⠀⠰⣦⠀⠙⣇⠀⠈⠀⠈⠁⠀⠀⠀⠀⠀⠀⠀⣀⠀⠀⠀⢀⣤⠀⠀⠀⠀⢀⡀⠀⠀⠀⠀⠀⠀⠈⠀⠀⠟⠁⠀⡴⠋⠀⠀⠀⠀',
+  '⠀⠀⠀⠀⠈⢧⠀⠈⠀⠀⠀⠀⠀⠀⢰⠶⢄⡀⠀⡜⠀⠓⢄⡠⠋⠀⢣⣀⡤⠒⠉⢡⠀⠀⠀⣀⡀⠀⠀⠀⠀⠀⠀⠈⠀⢀⡴⠋⠀⠀',
+  '⠀⠀⠛⢦⠀⠀⠀⠀⠀⠀⣀⡀⠀⠀⠸⠀⠀⠈⠚⠁⠀⠀⠀⠀⢀⣀⡠⠥⢤⡄⠀⠘⠤⠔⠊⠉⡇⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⠖⠀',
+  '⠀⠠⡄⠀⠀⠀⠀⠀⠀⠀⡇⢈⡩⠶⠒⠂⠙⡄⠀⠀⠀⠀⣠⠚⠉⠀⠀⠀⢠⠀⠀⢀⣠⠴⠒⠊⠉⠒⢤⣠⡄⠀⠀⠀⠀⠀⠀⠀⢀⠀',
+  '⠀⠀⠀⣀⡤⠔⠒⠉⢱⣦⡇⡇⠀⠀⢠⡀⠘⡾⡄⠀⠀⡰⠁⠀⠀⣠⣴⣶⣾⠀⣰⡟⠁⠀⢀⣀⡀⠀⠠⡹⡄⠀⢀⣴⠉⠐⠢⣄⢀⡀',
+  '⢴⣶⠽⠒⠀⠀⠀⠀⠀⣧⣱⣇⠀⠀⢸⣷⠀⠙⣷⡀⢠⡇⠀⠀⡄⣿⠿⠿⠇⣼⣿⠀⠀⢮⣏⡀⠈⡆⠀⠀⢹⡤⢺⠃⠀⠀⠄⡔⠀⠀',
+  '⠈⣇⠀⠀⣰⠀⠀⣾⡍⠉⢻⣿⠀⠀⠈⠉⠀⠀⠈⢣⢸⢷⡀⠀⠘⠙⠒⠒⣾⠡⣿⠀⠀⢸⠀⢹⣄⠇⠀⠀⣸⢠⠏⠀⢀⣜⠞⠀⠀⠀',
+  '⠀⠘⠶⣉⣹⡀⠀⠘⡏⢊⠁⢸⠀⠀⠰⣿⠻⡄⠀⠀⢻⡐⡷⣄⠀⠀⠀⠀⢹⡴⢿⡄⠀⠚⠓⠚⠁⠀⠀⣰⣷⡏⠀⠀⣠⠋⠀⠀⠀⠀',
+  '⠀⠀⠀⢀⡉⢧⠀⠀⢹⡘⡄⢸⠀⠀⠀⣿⣇⣿⡤⠴⠖⣿⣇⣠⣏⡓⣲⣶⣿⣅⠀⠙⠤⣀⣀⣀⣀⣤⢾⣿⡯⢍⣲⠞⢉⡿⠀⠀⠀⠀',
+  '⠀⠸⢏⡁⠀⠈⡄⠀⠀⢱⣷⠈⣶⣖⣿⣿⣾⣈⣷⣾⣿⣿⠿⣿⢿⣟⣿⣿⣿⣟⠳⣴⣄⣅⣠⡤⠗⠁⣼⠿⣀⠀⣸⡖⠋⠀⠀⠀⠀⠀',
+  '⠀⠀⠀⠉⢢⡄⠱⢶⣋⣉⣩⣇⣈⣿⣯⣿⣿⣿⣿⣿⣿⣭⣿⡤⢻⠟⣻⡿⣿⣿⣿⣿⣯⠛⢦⡀⠀⠀⠫⠤⠬⠋⠀⠉⠑⠦⣄⡀⠀⠀',
+  '⠀⠀⢀⠴⠋⠀⠀⠀⠀⣡⣾⣵⠿⠟⠛⠋⠉⠉⠉⠉⠉⠛⠛⠿⣷⣮⣉⣉⡋⢽⣮⣿⣿⠿⡿⠹⣶⣄⠀⠀⠀⠀⠀⠀⣠⠔⠋⠀⠀⠀',
+  '⠀⠘⠓⠤⢄⡀⠀⠀⣰⠟⠉⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⠙⡿⣿⣤⡴⢛⣤⣿⣄⣳⡌⢹⣾⣷⣄⠀⠀⠀⠯⡀⠀⠀⠀⠀⠀',
+  '⠀⠀⠀⠀⢠⠎⢀⡾⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠠⠋⢻⣿⣿⡙⣻⣍⢻⠿⢯⡋⣿⣿⣷⡀⠀⠀⠈⢳⡄⠀⠀⠀',
+  '⠀⠀⢀⡔⠁⢀⡞⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠘⣻⣿⣧⣤⣿⣴⣾⣷⣾⣯⣿⣿⣤⠤⠒⠉⠀⠀⠀⠀',
+  '⠀⠀⠀⠁⠁⡾⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠛⢟⣿⣿⣤⣴⣿⣿⣯⣿⣿⣿⣦⡀⠀⠀⠀⠀⠀',
+  '⠀⠀⠀⠀⣸⠃⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⢣⣿⣾⡟⢿⣿⡿⠛⢿⣧⣿⠛⠀⠀⠀⠀⠀',
+  '⠀⠀⠀⠀⣿⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⠻⡻⣧⡉⠐⠃⠀⢸⣿⢸⠀⠀⠀⠀⠀⠀',
+  '⠀⠐⠀⠀⠙⠷⣤⣀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠱⣽⣿⣤⣤⣴⡿⣣⡟⠀⠀⠀⠀⠀⠀',
+  '⠀⠐⠀⠀⠀⠀⠀⠉⠉⠉⠉⢹⠛⠓⠚⠒⠒⠲⠶⠶⠴⠤⠤⠤⠤⠤⠤⠄⣀⣄⣀⣀⣀⣀⣀⣀⣀⣉⣛⣿⡷⠾⠛⠁⠀⠀⠀⠀⠓⠀',
+  '⠀⢀⡤⠀⠀⠀⠀⠀⠀⠀⠀⢸⣀⡠⠔⠛⡇⠀⠀⠀⡀⠀⠀⠀⠀⠀⠀⠀⠀⢠⣄⠀⢠⠏⠀⠉⠉⠛⠁⠀⠀⠀⠀⠀⠀⠀⠘⢦⡄⠀',
+  '⠀⠀⠀⣠⠖⠀⠀⡀⠀⠀⠀⠈⠁⠀⠀⠀⢳⠀⡠⠚⠉⢆⠀⢀⠜⠑⢄⠀⠀⡞⠈⠱⠾⠀⠀⠀⠀⠀⠀⠀⠀⠀⢠⡀⠈⢦⡀⠀⠀⠀',
+  '⠀⠀⠈⠁⠀⣠⠎⠀⢀⡼⠁⢀⠀⠀⠀⠀⠘⠋⠀⠀⠀⠈⠷⠃⠀⠀⠀⠳⡼⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⠀⢢⡀⠈⢷⡀⠈⠗⠀⠀⠀',
+  '⠀⠀⠀⠀⠈⠁⠀⠀⡻⠁⠀⠛⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠀⠈⠃⠀⠈⠁⠀⠀⠀⠀⠀',
+].join('\n')
 
 export function createProgram(): Command {
   const program = new Command()
@@ -28,8 +61,17 @@ export function createProgram(): Command {
         '  --db <path>         Override OpenCode database path\n\n' +
         "Use 'taco <command> --help' for command-specific options."
     )
-    .version('0.1.0')
     .allowExcessArguments(true)
+
+  // Display ASCII art before --help output
+  program.addHelpText('before', TACO_ART + '\n')
+
+  // Custom --version that shows art then version string
+  program.version(
+    `\n${TACO_ART}\n\n🌮 TACO v${packageJson.version} — Token Accumulator Counter for OpenCode`,
+    '-V, --version',
+    'Display version number'
+  )
 
   // Register all sub-commands
   registerOverviewCommand(program)
@@ -42,6 +84,8 @@ export function createProgram(): Command {
   registerTrendsCommand(program)
   registerExportCommand(program)
   registerTuiCommand(program)
+  registerTodayCommand(program)
+  registerConfigCommand(program)
 
   // Default action (no sub-command) → run TUI if TTY available, otherwise overview
   program.action(async () => {
