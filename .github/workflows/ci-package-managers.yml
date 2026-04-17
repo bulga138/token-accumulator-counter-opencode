@@ -66,13 +66,16 @@ jobs:
         run: |
           case "${{ matrix.package-manager }}" in
             npm)
+              # Generate package-lock.json from pnpm-lock.yaml (pnpm is canonical lockfile)
+              npm install --package-lock-only --ignore-scripts
               npm ci
               ;;
             pnpm)
               pnpm install --frozen-lockfile
               ;;
             yarn)
-              yarn install --frozen-lockfile
+              # Generate yarn.lock from package.json (pnpm is canonical lockfile)
+              yarn install --no-immutable 2>/dev/null || yarn install
               ;;
           esac
         shell: bash
@@ -231,6 +234,8 @@ jobs:
         run: |
           case "${{ matrix.package-manager }}" in
             npm)
+              # Generate package-lock.json from package.json (pnpm is canonical lockfile)
+              npm install --package-lock-only --ignore-scripts
               npm ci
               ;;
             pnpm)

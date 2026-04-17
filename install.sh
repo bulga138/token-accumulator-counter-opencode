@@ -234,6 +234,7 @@ ARCH=$(detect_arch)
 SYSTEM=false
 LOCAL_INSTALL=true
 PREFER_SOURCE=false
+LATEST_TAG="${LATEST_TAG:-}"
 
 # --- Parse args ---
 for arg in "$@"; do
