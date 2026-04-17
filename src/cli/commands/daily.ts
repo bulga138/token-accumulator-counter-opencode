@@ -10,11 +10,16 @@ import { formatDailyMarkdown } from '../../format/markdown.js'
 import { addFilterFlags, buildRangeLabel } from '../filters.js'
 import { getConfig } from '../../config/index.js'
 import type { DailyStats, SortField } from '../../data/types.js'
+import type { GatewayDailyActivity } from '../../data/gateway-types.js'
+import { fetchDailyActivity } from '../../data/gateway-litellm.js'
 
 export function registerDailyCommand(program: Command): void {
   const cmd = program.command('daily').description('Show daily usage breakdown').alias('d')
 
-  addFilterFlags(cmd).option('--sort <field>', 'Sort by: cost, tokens, date, messages (default: date)')
+  addFilterFlags(cmd).option(
+    '--sort <field>',
+    'Sort by: cost, tokens, date, messages (default: date)'
+  )
 
   cmd.action(async opts => {
     const config = getConfig()
@@ -32,6 +37,23 @@ export function registerDailyCommand(program: Command): void {
     stats = sortDailyStats(stats, sort)
     const rangeLabel = buildRangeLabel(opts)
 
+    // Fetch gateway daily activity if gateway is configured
+    let gatewayDays: GatewayDailyActivity[] | null = null
+    if (config.gateway && format === 'visual') {
+      // Use the filtered date range from the filters, or default to current billing period
+      const startDate = filters.from
+        ? filters.from.toLocaleDateString('en-CA')
+        : new Date(Date.now() - 30 * 86400000).toLocaleDateString('en-CA')
+      const endDate = filters.to
+        ? filters.to.toLocaleDateString('en-CA')
+        : new Date().toLocaleDateString('en-CA')
+
+      const result = await fetchDailyActivity(config.gateway, startDate, endDate)
+      if (result && result.days.length > 0) {
+        gatewayDays = result.days
+      }
+    }
+
     if (format === 'json') {
       process.stdout.write(formatDailyJson(stats) + '\n')
     } else if (format === 'csv') {
@@ -43,7 +65,8 @@ export function registerDailyCommand(program: Command): void {
       const dailySeries = stats
         .map(d => ({ date: d.date, tokens: d.tokens.total }))
         .sort((a, b) => a.date.localeCompare(b.date))
-      process.stdout.write(formatDaily(stats, rangeLabel, dailySeries))
+      // Pass gateway days to formatDaily so they appear as an inline column
+      process.stdout.write(formatDaily(stats, rangeLabel, dailySeries, gatewayDays))
     }
   })
 }

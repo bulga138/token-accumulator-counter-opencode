@@ -2,10 +2,19 @@ import type { Command } from 'commander'
 import { getDbAsync } from '../../data/db.js'
 import { loadUsageEvents, loadSessions } from '../../data/queries.js'
 import { buildFilters } from '../../utils/dates.js'
-import { computeOverview, computeModelStats, computeProviderStats, computeSessionStats } from '../../aggregator/index.js'
+import {
+  computeOverview,
+  computeModelStats,
+  computeProviderStats,
+  computeSessionStats,
+} from '../../aggregator/index.js'
 import { getConfig } from '../../config/index.js'
 import { renderModelPanels } from '../../viz/chart.js'
 import { getColors } from '../../theme/index.js'
+import { fetchGatewayMetrics } from '../../data/gateway.js'
+import { fetchModelSpend, getCurrentBillingPeriod } from '../../data/gateway-litellm.js'
+import { aggregateModelSpend, normalizeModelName } from '../../utils/model-names.js'
+import type { GatewayMetrics } from '../../data/gateway-types.js'
 
 /** Strip ANSI escape codes so we can measure the visible width of a string. */
 function stripAnsi(str: string): string {
@@ -58,6 +67,41 @@ export function registerTuiCommand(program: Command): void {
         const modelStats = computeModelStats(events)
         const providerStats = computeProviderStats(events)
         const sessionStats = computeSessionStats(events, sessions)
+
+        // Fetch gateway metrics in the background (non-blocking).
+        // renderReady gates re-render calls so they only fire after the first
+        // synchronous render() has been called.
+        let gatewayMetrics: GatewayMetrics | null = null
+        let gatewayModelSpend: Map<string, number> | null = null
+        let renderReady = false
+
+        if (config.gateway) {
+          fetchGatewayMetrics(config.gateway)
+            .then(m => {
+              gatewayMetrics = m
+              if (renderReady) render()
+            })
+            .catch(() => {
+              /* non-fatal */
+            })
+
+          // Fetch per-model spend for the Models tab
+          const { startDate, endDate } = getCurrentBillingPeriod()
+          fetchModelSpend(config.gateway, startDate, endDate)
+            .then(result => {
+              if (result && result.modelSpend.length > 0) {
+                const rawMap: Record<string, number> = {}
+                for (const { model, spend } of result.modelSpend) {
+                  rawMap[model] = (rawMap[model] ?? 0) + spend
+                }
+                gatewayModelSpend = aggregateModelSpend(rawMap)
+                if (renderReady) render()
+              }
+            })
+            .catch(() => {
+              /* non-fatal */
+            })
+        }
 
         let activeTab = 0
         const tabs = ['Overview', 'Models', 'Providers', 'Sessions']
@@ -126,13 +170,36 @@ export function registerTuiCommand(program: Command): void {
           return content
         }
 
-        function renderCompactModel(model: any, index: number) {
+        function renderCompactModel(
+          model: any,
+          index: number,
+          gwSpend: Map<string, number> | null
+        ) {
           const percentage = (model.percentage * 100).toFixed(1)
           const color = [COLORS.info, COLORS.highlight, COLORS.warning, COLORS.label][index % 4]
 
+          // Look up gateway spend for this model
+          let gwCostStr = ''
+          if (gwSpend) {
+            const normalized = normalizeModelName(model.modelId)
+            let gwCost: number | undefined = gwSpend.get(normalized)
+            if (gwCost === undefined) {
+              for (const [key, val] of gwSpend) {
+                const nk = normalizeModelName(key)
+                if (nk === normalized || nk.startsWith(normalized) || normalized.startsWith(nk)) {
+                  gwCost = (gwCost ?? 0) + val
+                }
+              }
+            }
+            if (gwCost !== undefined) {
+              gwCostStr = ` | ${COLORS.label('GW:')} ${COLORS.info('$' + gwCost.toFixed(2))}`
+            }
+          }
+
           let content = `${index + 1}. ${color.bold(model.modelId)} ${COLORS.muted(`(${model.providerId})`)} ${COLORS.highlight(percentage + '%')}\n`
+          const costLabel = gwSpend ? 'Local $:' : 'Cost:'
           content += `   ${COLORS.label('Tokens:')} ${formatTokens(model.tokens.total)} | `
-          content += `${COLORS.label('Cost:')} $${model.cost.toFixed(2)} | `
+          content += `${COLORS.label(costLabel)} $${model.cost.toFixed(2)}${gwCostStr} | `
           content += `${COLORS.label('Msgs:')} ${model.messageCount}\n`
           return content
         }
@@ -146,7 +213,15 @@ export function registerTuiCommand(program: Command): void {
 
             content += `${COLORS.label('Total Tokens:')}     ${COLORS.highlight(formatTokens(overview.tokens.total))}\n`
             content += `${COLORS.label('Total Sessions:')}   ${COLORS.info(overview.sessionCount.toString())}\n`
-            content += `${COLORS.label('Total Cost:')}       ${COLORS.warning('$' + overview.cost.toFixed(4))}\n`
+            content += `${COLORS.label(config.gateway ? 'Local Cost:' : 'Total Cost:')}       ${COLORS.warning('$' + overview.cost.toFixed(4))}\n`
+            if (gatewayMetrics) {
+              const diff = overview.cost - gatewayMetrics.totalSpend
+              const diffStr =
+                diff >= 0
+                  ? COLORS.muted(`  (+$${diff.toFixed(2)} vs gateway)`)
+                  : COLORS.muted(`  (-$${Math.abs(diff).toFixed(2)} vs gateway)`)
+              content += `${COLORS.label('Gateway Cost:')}     ${COLORS.info('$' + gatewayMetrics.totalSpend.toFixed(4))}${diffStr}\n`
+            }
             content += `${COLORS.label('Active Days:')}      ${overview.activedays}/${overview.totalDays}\n`
             content += `${COLORS.label('Current Streak:')}   ${overview.currentStreak} days\n\n`
 
@@ -160,17 +235,29 @@ export function registerTuiCommand(program: Command): void {
             }
 
             if (providerStats.length > 0) {
-              const topProviders = providerStats.slice(0, 3).map(p => ({
-                name: p.providerId,
-                value: `${(p.percentage * 100).toFixed(1)}%`,
-                detail: `($${p.cost.toFixed(2)})`,
-              }))
+              const topProviders = providerStats.slice(0, 3).map(p => {
+                // For providers with non-zero local cost and gateway data available,
+                // show both local and gateway totals. Gateway spend is per-model and
+                // routes through cloud providers; aggregate total maps to the main provider.
+                let detail: string
+                if (gatewayMetrics && p.cost > 0 && p.cost >= overview.cost * 0.5) {
+                  // This is the primary provider (majority of local spend); show gateway total
+                  detail = `(local $${p.cost.toFixed(2)} | gw $${gatewayMetrics.totalSpend.toFixed(2)})`
+                } else {
+                  detail = `($${p.cost.toFixed(2)})`
+                }
+                return {
+                  name: p.providerId,
+                  value: `${(p.percentage * 100).toFixed(1)}%`,
+                  detail,
+                }
+              })
               content += renderTop3Section('Top Providers', topProviders) + '\n'
             }
 
-            if (sessions.length > 0) {
-              const topSessions = sessions.slice(0, 3).map(s => ({
-                name: (s.title || s.id.substring(0, 8)).substring(0, 25),
+            if (sessionStats.length > 0) {
+              const topSessions = sessionStats.slice(0, 3).map(s => ({
+                name: (s.title || s.sessionId.substring(0, 8)).substring(0, 25),
                 value: new Date(s.timeCreated).toLocaleDateString(),
               }))
               content += renderTop3Section('Recent Sessions', topSessions) + '\n'
@@ -182,6 +269,38 @@ export function registerTuiCommand(program: Command): void {
             content += `  ${COLORS.muted('Cache Read:')} ${formatTokens(overview.tokens.cacheRead)}\n`
             content += `  ${COLORS.muted('Cache Write:')}${formatTokens(overview.tokens.cacheWrite)}\n`
             content += `  ${COLORS.muted('Reasoning:')}  ${formatTokens(overview.tokens.reasoning)}\n`
+
+            // Gateway metrics row (shown when configured and data is available)
+            if (config.gateway) {
+              content += '\n'
+              if (gatewayMetrics) {
+                const gw = gatewayMetrics
+                const spendStr = `$${gw.totalSpend.toFixed(2)}`
+                const budgetStr =
+                  gw.budgetLimit !== null
+                    ? ` / $${gw.budgetLimit.toFixed(2)}  (${((gw.totalSpend / gw.budgetLimit) * 100).toFixed(1)}%)`
+                    : ''
+                const cacheIndicator = gw.cached ? COLORS.muted(' cached') : COLORS.muted(' live')
+                content += `${COLORS.label.bold('Gateway Spend:')}\n`
+                content += `  ${COLORS.info(spendStr)}${COLORS.muted(budgetStr)}${cacheIndicator}\n`
+                if (gw.teamSpend !== null) {
+                  const teamStr = gw.teamName ? ` (${gw.teamName})` : ''
+                  const teamBudget =
+                    gw.teamBudgetLimit !== null
+                      ? ` / $${gw.teamBudgetLimit.toFixed(2)}  (${((gw.teamSpend / gw.teamBudgetLimit) * 100).toFixed(1)}%)`
+                      : ''
+                  content += `  ${COLORS.muted('Team:')} $${gw.teamSpend.toFixed(2)}${COLORS.muted(teamBudget + teamStr)}\n`
+                }
+                const diff = overview.cost - gw.totalSpend
+                const diffStr =
+                  diff >= 0
+                    ? `+$${diff.toFixed(2)} local vs gateway`
+                    : `-$${Math.abs(diff).toFixed(2)} local vs gateway`
+                content += `  ${COLORS.muted(diffStr)}\n`
+              } else {
+                content += `${COLORS.muted('Gateway: fetching…')}\n`
+              }
+            }
           } else if (activeTab === 1) {
             if (modelStats.length === 0) {
               content = `\n${COLORS.label.bold('Models')}\n\nNo model data available.\n`
@@ -200,10 +319,16 @@ export function registerTuiCommand(program: Command): void {
 
               if (useCompactView) {
                 visibleModels.forEach((m, i) => {
-                  content += renderCompactModel(m, modelsScrollOffset + i) + '\n'
+                  content += renderCompactModel(m, modelsScrollOffset + i, gatewayModelSpend) + '\n'
                 })
               } else {
-                const panelLines = renderModelPanels(visibleModels, uiWidth, 4, true)
+                const panelLines = renderModelPanels(
+                  visibleModels,
+                  uiWidth,
+                  4,
+                  true,
+                  gatewayModelSpend
+                )
                 content += panelLines.join('\n')
               }
 
@@ -243,7 +368,12 @@ export function registerTuiCommand(program: Command): void {
                   p.providerId.length > nameWidth
                     ? p.providerId.slice(0, nameWidth - 1) + '…'
                     : p.providerId.padEnd(nameWidth)
-                content += `${num} ${COLORS.value(name)} ${COLORS.info(bar)} ${COLORS.highlight(formatTokens(p.tokens.total))} ${COLORS.muted(`(${percentage}%)`)} ${COLORS.warning(`$${p.cost.toFixed(2)}`)}\n`
+                // Show gateway total alongside local cost for the primary provider
+                let costDisplay = COLORS.warning(`$${p.cost.toFixed(2)}`)
+                if (gatewayMetrics && p.cost > 0 && p.cost >= overview.cost * 0.5) {
+                  costDisplay += COLORS.muted(` gw:$${gatewayMetrics.totalSpend.toFixed(2)}`)
+                }
+                content += `${num} ${COLORS.value(name)} ${COLORS.info(bar)} ${COLORS.highlight(formatTokens(p.tokens.total))} ${COLORS.muted(`(${percentage}%)`)} ${costDisplay}\n`
               })
             }
           } else if (activeTab === 3) {
@@ -303,7 +433,7 @@ export function registerTuiCommand(program: Command): void {
             renderContent(contentWidth),
             COLORS.border('─'.repeat(dividerWidth)),
             COLORS.muted(
-              'Click tabs or press 1-4 to switch | q to quit' +
+              '←/→ or Tab to switch tabs | 1-4 jump | q to quit' +
                 (activeTab === 1 ? ' | ↑/↓ to scroll' : '')
             ),
           ].join('\n')
@@ -319,6 +449,7 @@ export function registerTuiCommand(program: Command): void {
         }
 
         render()
+        renderReady = true
 
         // Handle input
         process.stdin.on('data', (key: Buffer) => {
@@ -359,23 +490,51 @@ export function registerTuiCommand(program: Command): void {
             return
           }
 
-          // Arrow keys for scrolling in models tab
-          if (activeTab === 1 && code === 27 && str.length >= 3 && str.charCodeAt(1) === 91) {
+          // Arrow keys: Left/Right switch tabs; Up/Down scroll models tab
+          if (code === 27 && str.length >= 3 && str.charCodeAt(1) === 91) {
             const arrowCode = str.charCodeAt(2)
-            if (arrowCode === 65 && modelsScrollOffset > 0) {
-              // Up
-              modelsScrollOffset--
+            if (arrowCode === 67) {
+              // Right arrow → next tab
+              activeTab = (activeTab + 1) % tabs.length
+              modelsScrollOffset = 0
               render()
               return
-            } else if (
-              arrowCode === 66 &&
-              modelsScrollOffset + MODELS_PER_PAGE < modelStats.length
-            ) {
-              // Down
-              modelsScrollOffset++
+            } else if (arrowCode === 68) {
+              // Left arrow → previous tab
+              activeTab = (activeTab - 1 + tabs.length) % tabs.length
+              modelsScrollOffset = 0
               render()
               return
+            } else if (activeTab === 1) {
+              if (arrowCode === 65 && modelsScrollOffset > 0) {
+                // Up
+                modelsScrollOffset--
+                render()
+                return
+              } else if (
+                arrowCode === 66 &&
+                modelsScrollOffset + MODELS_PER_PAGE < modelStats.length
+              ) {
+                // Down
+                modelsScrollOffset++
+                render()
+                return
+              }
             }
+          }
+
+          // Tab / Shift+Tab to cycle through tabs
+          if (str === '\t') {
+            activeTab = (activeTab + 1) % tabs.length
+            modelsScrollOffset = 0
+            render()
+            return
+          }
+          if (str === '\x1B[Z') {
+            activeTab = (activeTab - 1 + tabs.length) % tabs.length
+            modelsScrollOffset = 0
+            render()
+            return
           }
 
           // Regular keys

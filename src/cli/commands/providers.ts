@@ -9,6 +9,7 @@ import { formatProvidersCsv } from '../../format/csv.js'
 import { formatProviderMarkdown } from '../../format/markdown.js'
 import { addFilterFlags, buildRangeLabel } from '../filters.js'
 import { getConfig } from '../../config/index.js'
+import { fetchGatewayMetrics } from '../../data/gateway.js'
 import type { ProviderStats, SortField } from '../../data/types.js'
 
 export function registerProvidersCommand(program: Command): void {
@@ -17,8 +18,7 @@ export function registerProvidersCommand(program: Command): void {
     .description('Show per-provider token usage breakdown')
     .alias('p')
 
-  addFilterFlags(cmd)
-    .option('--sort <field>', 'Sort by: cost, tokens, messages (default: tokens)')
+  addFilterFlags(cmd).option('--sort <field>', 'Sort by: cost, tokens, messages (default: tokens)')
 
   cmd.action(async opts => {
     const config = getConfig()
@@ -36,6 +36,9 @@ export function registerProvidersCommand(program: Command): void {
     stats = sortProviderStats(stats, sort)
     const rangeLabel = buildRangeLabel(opts)
 
+    const gw =
+      format === 'visual' && config.gateway ? await fetchGatewayMetrics(config.gateway) : null
+
     if (format === 'json') {
       process.stdout.write(formatProvidersJson(stats) + '\n')
     } else if (format === 'csv') {
@@ -43,16 +46,19 @@ export function registerProvidersCommand(program: Command): void {
     } else if (format === 'markdown') {
       process.stdout.write(formatProviderMarkdown(stats, rangeLabel) + '\n')
     } else {
-      process.stdout.write(formatProviders(stats, rangeLabel))
+      process.stdout.write(formatProviders(stats, rangeLabel, gw?.totalSpend))
     }
   })
 }
 
 function sortProviderStats(stats: ProviderStats[], sort: SortField): ProviderStats[] {
   switch (sort) {
-    case 'cost': return [...stats].sort((a, b) => b.cost - a.cost)
-    case 'messages': return [...stats].sort((a, b) => b.messageCount - a.messageCount)
+    case 'cost':
+      return [...stats].sort((a, b) => b.cost - a.cost)
+    case 'messages':
+      return [...stats].sort((a, b) => b.messageCount - a.messageCount)
     case 'tokens':
-    default: return [...stats].sort((a, b) => b.tokens.total - a.tokens.total)
+    default:
+      return [...stats].sort((a, b) => b.tokens.total - a.tokens.total)
   }
 }

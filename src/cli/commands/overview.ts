@@ -23,6 +23,9 @@ import { homedir } from 'os'
 import type { UsageEvent, SessionRecord } from '../../data/types.js'
 import { emptyTokenSummary, addTokens, DEFAULT_DATE_RANGE_DAYS } from '../../data/types.js'
 import type { DailyAggregate } from '../../data/queries.js'
+import { fetchGatewayMetrics } from '../../data/gateway.js'
+import type { GatewayMetrics } from '../../data/gateway-types.js'
+import { formatCost } from '../../utils/formatting.js'
 
 // Simple file cache for heatmap data (now stores aggregates instead of full events)
 interface CacheEntry {
@@ -91,10 +94,7 @@ function saveCachedHeatmap(dbPath: string, fromDate: Date, aggregates: DailyAggr
 // Memory-efficient overview computation using streaming.
 // Computes streaks, mostActiveDay, longestSession, and finishReasons
 // so output matches the full computeOverview() in the TUI.
-function computeOverviewStreaming(
-  events: Iterable<UsageEvent>,
-  sessions: SessionRecord[]
-) {
+function computeOverviewStreaming(events: Iterable<UsageEvent>, sessions: SessionRecord[]) {
   const tokens = emptyTokenSummary()
   let cost = 0
   const modelSet = new Set<string>()
@@ -249,7 +249,8 @@ export function registerOverviewCommand(program: Command): void {
         finishReasons: {},
       }
 
-      process.stdout.write(formatOverviewJson(stats, heatmap) + '\n')
+      const gwForJson = config.gateway ? await fetchGatewayMetrics(config.gateway) : undefined
+      process.stdout.write(formatOverviewJson(stats, heatmap, gwForJson) + '\n')
     } else if (format === 'csv') {
       const eventStream = streamUsageEvents(db, filters)
       const sessions = loadSessions(db, filters)
@@ -257,15 +258,17 @@ export function registerOverviewCommand(program: Command): void {
       const fullStats = {
         ...stats,
         activedays: stats.activeDays,
-        totalDays: stats.sortedDays.length >= 2
-          ? Math.round(
-              (new Date(stats.sortedDays[stats.sortedDays.length - 1]!).getTime() -
-                new Date(stats.sortedDays[0]!).getTime()) /
-                86_400_000
-            ) + 1
-          : 1,
+        totalDays:
+          stats.sortedDays.length >= 2
+            ? Math.round(
+                (new Date(stats.sortedDays[stats.sortedDays.length - 1]!).getTime() -
+                  new Date(stats.sortedDays[0]!).getTime()) /
+                  86_400_000
+              ) + 1
+            : 1,
       }
-      process.stdout.write(formatOverviewCsv(fullStats) + '\n')
+      const gwForCsv = config.gateway ? await fetchGatewayMetrics(config.gateway) : undefined
+      process.stdout.write(formatOverviewCsv(fullStats, gwForCsv) + '\n')
     } else if (format === 'markdown') {
       const eventStream = streamUsageEvents(db, filters)
       const sessions = loadSessions(db, filters)
@@ -288,7 +291,8 @@ export function registerOverviewCommand(program: Command): void {
         totalDays,
       }
 
-      process.stdout.write(formatOverviewMarkdown(fullStats, rangeLabel) + '\n')
+      const gwForMd = config.gateway ? await fetchGatewayMetrics(config.gateway) : undefined
+      process.stdout.write(formatOverviewMarkdown(fullStats, rangeLabel, gwForMd) + '\n')
     } else {
       // Visual (default) - use streaming for memory efficiency
       const eventStream = streamUsageEvents(db, filters)
@@ -325,7 +329,10 @@ export function registerOverviewCommand(program: Command): void {
         totalDays,
       }
 
-      process.stdout.write(formatOverview(fullStats, heatmap, rangeLabel, dailySeries))
+      // Fetch gateway metrics once — used both in the KV block and in the gateway section
+      const gw = config.gateway ? await fetchGatewayMetrics(config.gateway) : null
+
+      process.stdout.write(formatOverview(fullStats, heatmap, rangeLabel, dailySeries, gw))
 
       // Budget warnings - use single SQLite query instead of loading events
       if (config.budget) {
@@ -344,9 +351,100 @@ export function registerOverviewCommand(program: Command): void {
         }
       }
 
+      // Gateway section (budget bar, team spend, reset date — data beyond the KV block)
+      if (gw) {
+        process.stdout.write(formatGatewaySection(gw, fullStats.cost))
+      }
+
       process.stdout.write('\n')
     }
 
     console.timeEnd('Overview command')
   })
+}
+
+// ─── Gateway section renderer ──────────────────────────────────────────────────
+
+function formatGatewaySection(gw: GatewayMetrics | null, localCost: number): string {
+  const divider = chalk.dim('─'.repeat(52))
+  const lines: string[] = [divider, chalk.bold('  Gateway Metrics'), '']
+
+  if (!gw) {
+    lines.push(chalk.yellow('  Could not reach gateway. Check your config and network.'))
+    lines.push(chalk.dim('  Run: taco config gateway --test'))
+    lines.push(divider)
+    return lines.join('\n') + '\n'
+  }
+
+  // Spend row
+  const spendStr = formatCost(gw.totalSpend)
+  if (gw.budgetLimit !== null) {
+    const pct = ((gw.totalSpend / gw.budgetLimit) * 100).toFixed(1)
+    const bar = budgetBar(gw.totalSpend, gw.budgetLimit)
+    lines.push(
+      `  Spend:     ${chalk.green(spendStr)} / ${formatCost(gw.budgetLimit)}  ${bar}  ${pct}%`
+    )
+  } else {
+    lines.push(`  Spend:     ${chalk.green(spendStr)}`)
+  }
+
+  // Team row
+  if (gw.teamSpend !== null) {
+    const teamLabel = gw.teamName ? `  (${gw.teamName})` : ''
+    if (gw.teamBudgetLimit !== null) {
+      const pct = ((gw.teamSpend / gw.teamBudgetLimit) * 100).toFixed(1)
+      const bar = budgetBar(gw.teamSpend, gw.teamBudgetLimit)
+      lines.push(
+        `  Team:      ${formatCost(gw.teamSpend)} / ${formatCost(gw.teamBudgetLimit)}  ${bar}  ${pct}%${teamLabel}`
+      )
+    } else {
+      lines.push(`  Team:      ${formatCost(gw.teamSpend)}${teamLabel}`)
+    }
+  }
+
+  // Budget reset row
+  if (gw.budgetResetAt) {
+    const d = new Date(gw.budgetResetAt)
+    const resetStr = d.toLocaleDateString(undefined, { dateStyle: 'medium' })
+    const durationStr = gw.budgetDuration ? `  (${gw.budgetDuration} cycle)` : ''
+    lines.push(`  Resets:    ${resetStr}${durationStr}`)
+  }
+
+  // Local vs gateway comparison
+  const diff = localCost - gw.totalSpend
+  const diffStr =
+    diff >= 0
+      ? chalk.dim(`+${formatCost(diff)} vs gateway`)
+      : chalk.dim(`${formatCost(diff)} vs gateway`)
+  lines.push(`  Local est: ${formatCost(localCost)}  ${diffStr}`)
+
+  // Source / freshness
+  const hostname = (() => {
+    try {
+      return new URL(gw.endpoint).hostname
+    } catch {
+      return gw.endpoint
+    }
+  })()
+  const ageMs = Date.now() - gw.fetchedAt
+  const ageSec = Math.round(ageMs / 1000)
+  const ageStr =
+    ageSec < 60
+      ? `${ageSec}s ago`
+      : ageSec < 3600
+        ? `${Math.round(ageSec / 60)}m ago`
+        : `${Math.round(ageSec / 3600)}h ago`
+  const cacheIndicator = gw.cached ? chalk.dim(`cached ${ageStr}`) : chalk.dim('live')
+  lines.push(`  Source:    ${chalk.dim(hostname)}  ${cacheIndicator}`)
+
+  lines.push(divider)
+  return lines.join('\n') + '\n'
+}
+
+/** Render a compact 10-char budget progress bar: [████░░░░░░] */
+function budgetBar(spend: number, limit: number): string {
+  const filled = Math.min(10, Math.round((spend / limit) * 10))
+  const empty = 10 - filled
+  const color = filled >= 8 ? chalk.red : filled >= 6 ? chalk.yellow : chalk.green
+  return color('[' + '█'.repeat(filled) + '░'.repeat(empty) + ']')
 }

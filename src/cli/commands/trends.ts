@@ -9,6 +9,7 @@ import { formatTrendsCsv } from '../../format/csv.js'
 import { formatTrendsMarkdown } from '../../format/markdown.js'
 import { addFilterFlags, buildRangeLabel } from '../filters.js'
 import { getConfig } from '../../config/index.js'
+import { fetchGatewayMetrics } from '../../data/gateway.js'
 import type { TrendPeriod, PeriodStats, SortField } from '../../data/types.js'
 
 export function registerTrendsCommand(program: Command): void {
@@ -34,6 +35,9 @@ export function registerTrendsCommand(program: Command): void {
     stats = sortTrendStats(stats, sort)
     const rangeLabel = buildRangeLabel(opts)
 
+    const gw =
+      format === 'visual' && config.gateway ? await fetchGatewayMetrics(config.gateway) : null
+
     if (format === 'json') {
       process.stdout.write(formatTrendsJson(stats) + '\n')
     } else if (format === 'csv') {
@@ -41,7 +45,7 @@ export function registerTrendsCommand(program: Command): void {
     } else if (format === 'markdown') {
       process.stdout.write(formatTrendsMarkdown(stats, period, rangeLabel) + '\n')
     } else {
-      process.stdout.write(formatTrends(stats, period, rangeLabel))
+      process.stdout.write(formatTrends(stats, period, rangeLabel, gw?.totalSpend))
     }
   })
 }

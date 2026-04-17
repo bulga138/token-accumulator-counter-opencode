@@ -8,6 +8,9 @@ import { getConfig } from '../../config/index.js'
 import chalk from 'chalk'
 import { formatTokens, formatCost } from '../../utils/formatting.js'
 import { getColors } from '../../theme/index.js'
+import { fetchGatewayMetrics } from '../../data/gateway.js'
+import { fetchModelSpend, getCurrentBillingPeriod } from '../../data/gateway-litellm.js'
+import { aggregateModelSpend, normalizeModelName } from '../../utils/model-names.js'
 
 const HEATMAP_CHARS = [' ', '░', '▒', '▓', '█']
 
@@ -58,9 +61,7 @@ export function registerTodayCommand(program: Command): void {
     const format = opts.format ?? config.defaultFormat ?? 'visual'
 
     if (format === 'json') {
-      process.stdout.write(
-        JSON.stringify({ date: todayStr, overview, modelStats }, null, 2) + '\n'
-      )
+      process.stdout.write(JSON.stringify({ date: todayStr, overview, modelStats }, null, 2) + '\n')
       return
     }
 
@@ -86,11 +87,10 @@ export function registerTodayCommand(program: Command): void {
       lines.push('  ' + divider)
       lines.push('')
 
-      const kv = (label: string, value: string) =>
-        `  ${label.padEnd(20)} ${value}`
+      const kv = (label: string, value: string) => `  ${label.padEnd(20)} ${value}`
 
       lines.push(kv('Total tokens:', formatTokens(overview.tokens.total)))
-      lines.push(kv('Cost:', formatCost(overview.cost)))
+      lines.push(kv(config.gateway ? 'Local Cost:' : 'Cost:', formatCost(overview.cost)))
       lines.push(kv('Messages:', String(overview.messageCount)))
       lines.push(kv('Sessions:', String(overview.sessionCount)))
 
@@ -123,6 +123,92 @@ export function registerTodayCommand(program: Command): void {
         }
         lines.push('')
       }
+    }
+
+    // Gateway metrics (when configured) — show real spend alongside local estimate
+    if (config.gateway) {
+      // Also fetch per-model gateway spend to augment the models table above
+      let gwModelSpend: Map<string, number> | null = null
+      const { startDate, endDate } = getCurrentBillingPeriod()
+      const spendResult = await fetchModelSpend(config.gateway, startDate, endDate)
+      if (spendResult && spendResult.modelSpend.length > 0) {
+        const rawMap: Record<string, number> = {}
+        for (const { model, spend } of spendResult.modelSpend) {
+          rawMap[model] = (rawMap[model] ?? 0) + spend
+        }
+        gwModelSpend = aggregateModelSpend(rawMap)
+      }
+
+      // Re-render model rows with gateway cost if we have model-level data
+      if (gwModelSpend && modelStats.length > 0 && overview.messageCount > 0) {
+        // Find and replace the models block in lines
+        const modelsHeaderIdx = lines.findIndex(l => l.includes('Models today:'))
+        if (modelsHeaderIdx >= 0) {
+          // Replace lines from modelsHeaderIdx+1 until the next empty line
+          const newModelLines: string[] = []
+          const top = modelStats.slice(0, 3)
+          top.forEach(m => {
+            const pct = (m.percentage * 100).toFixed(1)
+            const normalized = normalizeModelName(m.modelId)
+            let gwCost: number | undefined = gwModelSpend!.get(normalized)
+            if (gwCost === undefined) {
+              for (const [key, val] of gwModelSpend!) {
+                const nk = normalizeModelName(key)
+                if (nk === normalized || nk.startsWith(normalized) || normalized.startsWith(nk)) {
+                  gwCost = (gwCost ?? 0) + val
+                }
+              }
+            }
+            const gwStr = gwCost !== undefined ? `  ${dim('gw:' + formatCost(gwCost))}` : ''
+            newModelLines.push(
+              `    ${m.modelId.padEnd(36)} ${formatTokens(m.tokens.total).padStart(8)}  ${pct.padStart(5)}%  ${formatCost(m.cost)}${gwStr}`
+            )
+          })
+          lines.splice(modelsHeaderIdx + 1, top.length, ...newModelLines)
+        }
+      }
+
+      const gw = await fetchGatewayMetrics(config.gateway)
+      const divider = useColor ? colors.muted('─'.repeat(44)) : '─'.repeat(44)
+      lines.push('  ' + divider)
+      lines.push('')
+      lines.push(useColor ? colors.label.bold('  Gateway Metrics') : '  Gateway Metrics')
+      lines.push('')
+
+      if (!gw) {
+        lines.push('  Could not reach gateway. Run: taco config gateway --test')
+      } else {
+        const kv = (label: string, value: string) => `  ${label.padEnd(20)} ${value}`
+
+        lines.push(kv('Gateway spend:', formatCost(gw.totalSpend)))
+        if (gw.budgetLimit !== null) {
+          const pct = ((gw.totalSpend / gw.budgetLimit) * 100).toFixed(1)
+          lines.push(kv('Budget:', `${formatCost(gw.budgetLimit)}  (${pct}% used)`))
+        }
+        if (gw.teamSpend !== null) {
+          const label = gw.teamName ? `Team (${gw.teamName}):` : 'Team spend:'
+          lines.push(kv(label, formatCost(gw.teamSpend)))
+        }
+        lines.push(kv('Local estimate:', formatCost(overview.cost)))
+
+        const hostname = (() => {
+          try {
+            return new URL(gw.endpoint).hostname
+          } catch {
+            return gw.endpoint
+          }
+        })()
+        const ageMs = Date.now() - gw.fetchedAt
+        const ageStr =
+          ageMs < 60000
+            ? `${Math.round(ageMs / 1000)}s ago`
+            : ageMs < 3600000
+              ? `${Math.round(ageMs / 60000)}m ago`
+              : `${Math.round(ageMs / 3600000)}h ago`
+        const cacheStr = gw.cached ? `cached ${ageStr}` : 'live'
+        lines.push(kv('Source:', `${hostname}  (${cacheStr})`))
+      }
+      lines.push('')
     }
 
     process.stdout.write(lines.join('\n'))
