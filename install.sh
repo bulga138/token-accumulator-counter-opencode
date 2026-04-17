@@ -324,12 +324,16 @@ elif [[ -f "$REPO_DIR/tsconfig.json" ]]; then
     if ! command -v npm &> /dev/null; then
       error "Neither pnpm nor npm found. Please install pnpm: https://pnpm.io/installation"
     fi
+    INSTALL_CMD="npm install"
     BUILD_CMD="npm run build"
   else
+    INSTALL_CMD="pnpm install --frozen-lockfile"
     BUILD_CMD="pnpm run build"
   fi
 
   cd "$REPO_DIR"
+  info "Installing build dependencies..."
+  $INSTALL_CMD || error "Failed to install dependencies"
   $BUILD_CMD || error "Build failed"
   success "Built successfully"
 elif [[ ! -d "$REPO_DIR/dist" ]]; then
