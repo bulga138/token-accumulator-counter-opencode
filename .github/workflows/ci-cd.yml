@@ -82,7 +82,7 @@ jobs:
             os_name: windows
             arch: x64
             ext: '.exe'
-          - os: macos-latest
+          - os: macos-13
             target: macos-x64
             os_name: macos
             arch: x64
@@ -127,6 +127,16 @@ jobs:
       - name: Make executable (Unix)
         if: matrix.os != 'windows-latest'
         run: chmod +x taco
+
+      - name: Compress with UPX
+        if: matrix.os != 'windows-latest'
+        uses: crazy-max/ghaction-upx@v3
+        with:
+          version: v4.2.4
+          files: |
+            ./taco
+          args: --best
+        continue-on-error: true
 
       - name: Rename executable
         run: |
