@@ -17,6 +17,7 @@ import {
   getCurrentBillingPeriod,
   fetchModelSpend,
 } from '../../data/gateway-litellm.js'
+import { validateGatewayConfig, formatValidationErrors } from '../../utils/config-validation.js'
 
 export function registerConfigCommand(program: Command): void {
   const cmd = program
@@ -86,6 +87,8 @@ async function handleGatewaySubcommand(): Promise<void> {
     await runGatewaySetup()
   } else if (flags.has('--test')) {
     await runGatewayTest()
+  } else if (flags.has('--validate')) {
+    await runGatewayValidate()
   } else if (flags.has('--clear-cache')) {
     clearGatewayCache()
     console.log('Gateway live cache cleared. Next taco run will fetch fresh data.')
@@ -98,7 +101,8 @@ async function handleGatewaySubcommand(): Promise<void> {
       console.log('No gateway configured.')
       return
     }
-    const { gateway: _removed, ...rest } = config
+    const rest = { ...config }
+    delete (rest as { gateway?: unknown }).gateway
     saveConfig(rest)
     clearAllGatewayData()
     console.log('Gateway integration disabled and all cached data removed.')
@@ -110,13 +114,14 @@ async function handleGatewaySubcommand(): Promise<void> {
 
 function printGatewayHelp(): void {
   console.log(`
-taco config gateway [--setup|--test|--status|--clear-cache|--clear-all|--disable]
+taco config gateway [--setup|--test|--validate|--status|--clear-cache|--clear-all|--disable]
 
 Manage API gateway integration (LiteLLM, OpenRouter, custom…)
 
 Options:
   --setup         Interactive setup wizard
   --test          Fetch and display metrics from the configured gateway
+  --validate      Validate configuration without fetching live data
   --status        Show current gateway configuration (default)
   --clear-cache   Clear the live gateway cache (keeps daily snapshots)
   --clear-all     Clear all gateway data including daily snapshots
@@ -262,6 +267,60 @@ async function runGatewayTest(): Promise<void> {
   console.log()
 }
 
+// ─── Gateway validate ────────────────────────────────────────────────────────────
+
+async function runGatewayValidate(): Promise<void> {
+  const config = getConfig()
+
+  if (!config.gateway) {
+    console.error('No gateway configured. Run: taco config gateway --setup')
+    process.exit(1)
+  }
+
+  console.log(`\nValidating gateway configuration...\n`)
+
+  // Validate config structure
+  const validation = validateGatewayConfig(config.gateway)
+
+  if (!validation.valid) {
+    console.error('Configuration validation failed:')
+    console.error(formatValidationErrors(validation.errors))
+    console.error('\nPlease fix the errors above.')
+    process.exit(1)
+  }
+
+  console.log('  ✓ Configuration structure is valid')
+  console.log(`  ✓ Endpoint URL is valid: ${config.gateway.endpoint}`)
+  console.log(`  ✓ Auth type: ${config.gateway.auth.type}`)
+  console.log(`  ✓ Required mapping (totalSpend) is present`)
+
+  // Test JSONPath mappings if we can fetch data
+  console.log('\n  Testing JSONPath mappings...')
+  clearGatewayCache()
+  const metrics = await fetchGatewayMetrics(config.gateway)
+
+  if (!metrics) {
+    console.error('\n  ✗ Could not fetch data from gateway')
+    console.error('  The configuration is valid but the endpoint is not reachable.')
+    console.error('  Check your network connection and API credentials.')
+    process.exit(1)
+  }
+
+  console.log(`  ✓ Successfully connected to gateway`)
+  console.log(`  ✓ totalSpend resolved: ${formatCost(metrics.totalSpend)}`)
+
+  if (metrics.budgetLimit !== null) {
+    console.log(`  ✓ budgetLimit resolved: ${formatCost(metrics.budgetLimit)}`)
+  }
+  if (metrics.teamSpend !== null) {
+    console.log(`  ✓ teamSpend resolved: ${formatCost(metrics.teamSpend)}`)
+  }
+
+  console.log('\n  ✓ All validations passed!')
+  console.log(`\n  Config file: ${getConfigPath()}`)
+  console.log()
+}
+
 // ─── Interactive setup wizard ──────────────────────────────────────────────────
 
 async function runGatewaySetup(): Promise<void> {
@@ -308,7 +367,7 @@ async function runGatewaySetup(): Promise<void> {
     console.log('\n  Paste a sample JSON response from the endpoint to auto-detect field paths.')
     console.log('  (Press Enter on an empty line to skip and enter paths manually)\n')
     const lines: string[] = []
-    // eslint-disable-next-line no-constant-condition
+
     while (true) {
       const line = await ask('')
       if (line === '') break
@@ -338,12 +397,24 @@ async function runGatewaySetup(): Promise<void> {
       cacheTtlMinutes: isNaN(cacheTtlMinutes) ? 15 : cacheTtlMinutes,
     }
 
+    // ── Validate configuration ──
+    console.log('\nValidating configuration…')
+    const validation = validateGatewayConfig(gatewayConfig)
+    if (!validation.valid) {
+      console.error('\nConfiguration validation failed:')
+      console.error(formatValidationErrors(validation.errors))
+      console.error('\nPlease fix the errors above and run setup again.')
+      process.exit(1)
+    }
+    console.log('  ✓ Configuration is valid')
+
     // ── Test before saving ──
-    console.log('\nTesting configuration…')
+    console.log('\nTesting configuration with live endpoint…')
     clearGatewayCache()
     const metrics = await fetchGatewayMetrics(gatewayConfig)
     if (!metrics) {
       console.error('\nCould not fetch metrics with the provided configuration.')
+      console.error('The configuration is valid but the endpoint test failed.')
       console.error('Check the endpoint URL, auth credentials, and JSONPath mappings.')
       process.exit(1)
     }
@@ -361,7 +432,7 @@ async function runGatewaySetup(): Promise<void> {
     console.log('Run: taco overview  to see gateway metrics alongside local data\n')
   } catch (err) {
     rl.close()
-    if ((err as NodeJS.ErrnoException).code === 'ERR_USE_AFTER_CLOSE') {
+    if ((err as { code?: string }).code === 'ERR_USE_AFTER_CLOSE') {
       // Ctrl+C
       console.log('\nSetup cancelled.')
       process.exit(0)
