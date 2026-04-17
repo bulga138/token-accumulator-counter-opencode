@@ -2,14 +2,39 @@
 
 **Token Accumulator Counter for OpenCode** 🌮
 
-**Version:** 0.1.1  
-**Last Updated:** April 16, 2026
+**Version:** 0.1.3
+**Last Updated:** April 17, 2026
 
 ---
 
 ## What TACO Is
 
 A CLI tool that tracks your OpenCode token usage, costs, and shows pretty charts in your terminal. No background processes, no configuration, just run it and see your stats.
+
+## AI Agent Guidelines
+
+When modifying this codebase:
+
+**Always:**
+
+- Run `pnpm run typecheck` and `pnpm run lint` after changes
+- Follow existing patterns in neighboring files
+- Add error handling for all async operations
+- Respect memory constraints (streaming > loading all data)
+- Update CONTEXT.md if architecture changes
+
+**Never:**
+
+- Add new runtime dependencies without explicit approval
+- Break gateway integration (it's optional but must not crash)
+- Use `.all()` for large queries (use `.iterate()` instead)
+- Hardcode paths - use the path utilities in `src/utils/`
+
+**Testing:**
+
+- Unit tests: `pnpm test`
+- All commands must work without gateway config
+- Cross-platform: Windows (PowerShell), macOS, Linux
 
 ## How It Works
 
@@ -30,8 +55,9 @@ TACO reads OpenCode's SQLite database directly using multiple database drivers f
 ```bash
 taco              # Interactive TUI dashboard (default)
 taco overview     # Plain text overview with heatmap
-taco models       # Model breakdown
+taco models       # Model breakdown (with gateway cost column if configured)
 taco today        # Today's usage
+taco daily        # Daily breakdown (with gateway column if configured)
 taco sessions     # Recent sessions
 taco --help       # All commands
 ```
@@ -47,20 +73,6 @@ taco --help       # All commands
 
 The `!` prefix runs commands locally without sending data to the AI.
 
-## Installation
-
-**macOS / Linux:**
-```bash
-curl -fsSL https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/main/install.sh | bash
-```
-
-**Windows (PowerShell):**
-```powershell
-irm https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/main/install.ps1 | iex
-```
-
-Or download from GitHub releases.
-
 ## Architecture
 
 **Current Implementation:** Pure TypeScript CLI with memory optimizations
@@ -69,7 +81,7 @@ Or download from GitHub releases.
 - Database: Multi-driver support (Bun > better-sqlite3 > sql.js)
 - Output: Terminal charts via asciichart + chalk
 - Memory: Streaming queries, SQLite aggregations, query limits
-- No runtime dependencies beyond Node.js 18+
+- Dependencies: Fixed versions (see package.json), Node.js 20+
 
 **Key Memory Optimizations:**
 
@@ -79,55 +91,275 @@ Or download from GitHub releases.
 - Hard limit of 100k rows per query
 - Cache stores aggregates, not full events
 
-**Original Design (Deprecated):**
+**Gateway Data Flow:**
 
-- TypeScript plugin → TCP → Go daemon → SQLite
-- Abandoned because reading OpenCode's DB directly is simpler
+```
+config.gateway.endpoint (e.g. https://custom-gateway.com/user/info)
+       │
+       ├─ Primary fetch (JSONPath mappings, gateway.ts)
+       │    → GatewayMetrics: totalSpend, budgetLimit, teamSpend, budgetResetAt
+       │    → Used by: taco overview, taco today, TUI Overview tab
+       │
+       └─ Auto-derived baseUrl (gateway-litellm.ts, no extra config needed)
+            ├─ /spend/logs?start_date=...&end_date=...
+            │    → Per-model actual spend aggregated across all providers
+            │    → Used by: taco models (Gateway Cost column)
+            │
+            ├─ /user/daily/activity?start_date=...&end_date=...
+            │    → Per-day spend + token counts + per-model breakdown
+            │    → Used by: taco daily (Gateway $ column in main table)
+            │
+            └─ /model/info
+                 → Per-model pricing rates (input/output/cache cost per token)
+                 → Used by: taco config gateway --test (discovery probe)
+```
 
 ## Project Structure
 
 ```
 token-accumulator-counter-opencode/
-├── bin/taco.ts              # CLI entry point
+├── bin/taco.ts                  # CLI entry point
 ├── src/
-│   ├── aggregator/          # Data computation (streaming + aggregations)
-│   ├── cli/                 # Command implementations
-│   ├── config/              # Configuration management
-│   ├── data/                # Database queries (multi-driver)
-│   ├── format/              # Output formatting (visual, JSON, CSV, markdown)
-│   └── utils/               # Helper functions
-├── tests/                   # Unit tests (Vitest)
-├── dist/                    # Compiled JavaScript
-├── install.sh               # Main installer
-├── install.ps1              # PowerShell installer
-├── uninstall.sh             # Uninstaller
-├── update.sh                # Updater script
-├── eslint.config.js         # ESLint configuration
-├── .prettierrc              # Prettier configuration
-├── CONTRIBUTING.md          # Contribution guidelines
-└── README.md                # User documentation
+│   ├── aggregator/              # Data computation (streaming + aggregations)
+│   ├── cli/                     # Command implementations
+│   │   └── commands/
+│   │       ├── config-cmd.ts    # taco config (incl. gateway --setup/--test/--status)
+│   │       ├── daily.ts         # taco daily (+ gateway $ column in main table)
+│   │       ├── models.ts        # taco models (+ gateway cost column)
+│   │       ├── overview.ts      # taco overview (+ gateway metrics section)
+│   │       ├── today.ts         # taco today (+ gateway spend + per-model gateway cost)
+│   │       └── tui.ts           # TUI dashboard (+ gateway on all tabs)
+│   ├── config/                  # Configuration management
+│   │   └── index.ts             # TacoConfig, GatewayConfig, GatewayAuth,
+│   │                            # GatewayFieldMapping — all config types here
+│   ├── data/                    # Database queries + gateway integration
+│   │   ├── db.ts                # Multi-driver SQLite loader
+│   │   ├── queries.ts           # All SQLite query functions
+│   │   ├── gateway.ts           # Primary gateway fetch (JSONPath-based, any endpoint)
+│   │   ├── gateway-litellm.ts   # LiteLLM auto-discovery (/spend/logs, /user/daily/activity)
+│   │   ├── gateway-cache.ts     # Multi-layer cache (live TTL + date-range + daily snapshots)
+│   │   └── gateway-types.ts     # All gateway type definitions
+│   ├── format/                  # Output formatting (visual, JSON, CSV, markdown)
+│   ├── utils/                   # Helper functions
+│   │   ├── jsonpath.ts          # Zero-dep JSONPath resolver ($a.b[0].c) + env var resolver
+│   │   └── model-names.ts       # Model name normalization + aggregation across providers
+│   └── viz/                     # ASCII charts and heatmap rendering
+│       └── chart.ts             # renderModelPanels accepts optional gatewaySpend
+├── tests/                       # Unit tests (Vitest)
+├── dist/                        # Compiled JavaScript (auto-generated by tsc)
+├── install.sh                   # Main installer (macOS/Linux)
+├── install.ps1                  # PowerShell installer (Windows)
+├── uninstall.sh                 # Uninstaller
+├── update.sh                    # Updater script
+├── eslint.config.js             # ESLint configuration
+├── .prettierrc                  # Prettier configuration
+├── CONTRIBUTING.md              # Contribution guidelines
+└── README.md                    # User documentation
 ```
+
+**Cross-Reference Guide:**
+
+When modifying these files, also update:
+
+- `src/cli/commands/*.ts` → All formatters in `src/format/`
+- `src/config/index.ts` → Commands that use the new config option
+- `src/data/gateway*.ts` → Commands in `src/cli/commands/` for integration
+- `src/format/*.ts` → Keep all 4 formatters consistent (visual, json, csv, markdown)
 
 ## Features
 
 - **Token Tracking:** Input/output tokens, cache reads/writes, reasoning tokens
 - **Cost Analysis:** Daily summaries, projections by provider, budget warnings
+- **Gateway Integration:** Real spend/budget from any LiteLLM/OpenRouter/custom proxy
+  - Configurable JSONPath mappings for primary endpoint (any JSON shape)
+  - LiteLLM auto-discovery: `/spend/logs`, `/user/daily/activity`, `/model/info` probed automatically
+  - Per-model gateway cost column in `taco models`
+  - Gateway `$` column merged into `taco daily` main table
+  - Gateway costs inline in TUI Models, Providers, and Overview tabs
+  - Model name normalization across provider prefixes (bedrock, azure_ai, vertex_ai, etc.)
 - **Visualizations:** ASCII charts, heatmaps, TUI dashboard
 - **Cross-Platform:** Windows, macOS, Linux (zero native deps)
 - **Memory Efficient:** Handles millions of rows without overflow
 - **Zero Configuration:** Works out of the box
 
+## Known Issues & Constraints
+
+**OpenCode Bugs We Work Around:**
+
+- Cost shows $0 for dot-format model IDs (e.g., `claude-sonnet-4.6`) - gateway integration provides correct values
+
+**Hard Constraints:**
+
+- Node.js 20+ only (no older versions)
+- Dependencies are pinned to fixed versions (see package.json)
+- Must handle 32GB+ datasets without memory overflow
+- Gateway fetch failures must not crash the CLI (graceful degradation)
+- All file paths must use cross-platform utilities (no hardcoded `/` or `\`)
+- **Package Manager Support:** Must work with pnpm, npm, and yarn (no lockfile-specific features)
+
+## API Gateway Integration
+
+TACO can fetch real cost data from an API gateway (LiteLLM, OpenRouter, or any custom JSON endpoint) and display it alongside OpenCode's local estimates.
+
+**Why:** OpenCode computes costs locally using standard per-token list prices. Gateways may use different rates — the integration shows the gateway's actual figures so you know your real bill.
+
+### Quick Reference: Adding Gateway Support
+
+To add gateway data to a command:
+
+1. Import from `src/data/gateway.js` and/or `src/data/gateway-litellm.js`
+2. Fetch metrics (returns `null` if unavailable - always handle this case)
+3. Merge gateway data with local data
+4. Update all formatters in `src/format/`
+
+**Key Functions:**
+
+- `fetchGatewayMetrics(config)` - Primary endpoint (total spend, budget)
+- `fetchModelSpend(baseUrl, auth, startDate, endDate)` - Per-model spend from `/spend/logs`
+- `fetchDailyActivity(baseUrl, auth, startDate, endDate)` - Daily breakdown from `/user/daily/activity`
+- `normalizeModelName(name)` - Strip provider prefixes for aggregation
+
+### Cost Discrepancy
+
+OpenCode writes `cost: 0` for model IDs in "dot format" (e.g. `claude-sonnet-4.6`) — a known OpenCode bug where its pricing table doesn't recognize the dot-format names. TACO reads these zeros verbatim. The gateway integration shows the correct costs.
+
+OpenCode also uses standard list rates for dash-format models, while gateways may use negotiated pricing. This causes local estimates to be higher than actual gateway spend.
+
+### Primary Gateway (Any Endpoint)
+
+Configured via `taco config gateway --setup`. Uses JSONPath mappings so it works with any JSON shape:
+
+```json
+{
+  "gateway": {
+    "endpoint": "https://custom-gateway.com/user/info",
+    "auth": { "type": "bearer", "tokenOrEnv": "${API_KEY}" },
+    "mappings": {
+      "totalSpend": "$.user_info.spend",
+      "budgetLimit": "$.user_info.max_budget",
+      "budgetResetAt": "$.user_info.budget_reset_at",
+      "budgetDuration": "$.user_info.budget_duration",
+      "teamSpend": "$.teams[0].spend",
+      "teamBudgetLimit": "$.teams[0].max_budget",
+      "teamName": "$.teams[0].team_alias"
+    },
+    "cacheTtlMinutes": 15
+  }
+}
+```
+
+Auth supports: `bearer`, `basic`, custom `header`. API key values use `"${ENV_VAR}"` references so secrets are never stored.
+
+### LiteLLM Auto-Discovery
+
+When the gateway is LiteLLM-compliant (LiteLLM proxy, OpenRouter, or compatible), TACO automatically derives the base URL from the configured endpoint and probes standard paths — no additional configuration needed:
+
+| Endpoint               | Data                                         | Used By                             |
+| ---------------------- | -------------------------------------------- | ----------------------------------- |
+| `/spend/logs`          | Per-model actual spend by date range         | `taco models` (Gateway Cost column) |
+| `/user/daily/activity` | Per-day spend + tokens + per-model breakdown | `taco daily` (Gateway $ column)     |
+| `/model/info`          | Per-model pricing rates                      | `taco config gateway --test`        |
+
+Both `/spend/logs` and `/user/daily/activity` accept `start_date` and `end_date` query parameters — TACO automatically uses the current billing period (1st of month → today).
+
+**OpenRouter example:**
+
+```json
+{
+  "gateway": {
+    "endpoint": "https://openrouter.ai/api/v1/auth/key",
+    "auth": { "type": "bearer", "tokenOrEnv": "${OPENROUTER_API_KEY}" },
+    "mappings": {
+      "totalSpend": "$.data.usage",
+      "budgetLimit": "$.data.limit"
+    }
+  }
+}
+```
+
+### Model Name Normalization
+
+The gateway returns model names with provider prefixes (e.g. `vertex_ai/claude-opus-4-6`, `bedrock/global.anthropic.claude-opus-4-6-v1`, `azure_ai/Claude-Opus-4.6`). TACO normalizes all variants to a canonical form and aggregates spend across providers:
+
+```
+vertex_ai/claude-opus-4-6                    → $29.16
+bedrock/global.anthropic.claude-opus-4-6-v1  → $6.09
+azure_ai/Claude-Opus-4.6                     → $0.77
+─────────────────────────────────────────────────────
+claude-opus-4-6 (aggregated)                 → $36.02
+```
+
+Normalization steps: strip provider prefix → strip version suffix → replace dots with dashes → strip trailing wildcards.
+
+### Caching Strategy
+
+```
+~/.cache/taco/
+├── gateway-metrics.json         TTL: 15 min  Primary endpoint response
+├── gateway-model-spend.json     TTL: 60 min  /spend/logs per-model spend
+│                                             (past date ranges: 24h — immutable)
+├── gateway-daily-activity.json  TTL: 60 min  /user/daily/activity breakdown
+│                                             (past date ranges: 24h — immutable)
+└── gateway-daily/
+    └── YYYY-MM-DD.json          Permanent    Daily aggregate snapshots (never expire)
+```
+
+## Common Modification Patterns
+
+**Adding a new command:**
+
+1. Create file in `src/cli/commands/`
+2. Register in `bin/taco.ts`
+3. Update formatters in `src/format/`
+4. Add tests in `tests/`
+
+**Adding gateway support to existing command:**
+
+1. Import `fetchGatewayMetrics` from `src/data/gateway.js`
+2. Import LiteLLM helpers if needed (`src/data/gateway-litellm.js`)
+3. Gracefully handle null (gateway unavailable)
+4. Update all formatters (visual, json, csv, markdown)
+
+**Modifying database queries:**
+
+1. Use SQLite-native aggregations (COUNT, SUM)
+2. Add LIMIT clauses (default 100k max)
+3. Use date range filters (default 90 days)
+4. Test with `.iterate()` for large datasets
+
+**Adding a new config option:**
+
+1. Add type to `src/config/index.ts`
+2. Update `getConfig()` and `saveConfig()` if needed
+3. Add to `taco config` command in `src/cli/commands/config-cmd.ts`
+4. Document in README.md
+
 ## Technical Stack
 
-- **Runtime:** Node.js 18+ or Bun
+- **Runtime:** Node.js 20+ or Bun
 - **Database:** sql.js (WASM), better-sqlite3 (optional), bun:sqlite (Bun)
 - **CLI:** Commander.js
 - **Colors:** Chalk
 - **Charts:** asciichart
+- **HTTP:** Node built-in `fetch()` (gateway integration, no added dependency)
 - **Testing:** Vitest
 - **Build:** TypeScript compiler
 - **Linting:** ESLint 10 + TypeScript ESLint
 - **Formatting:** Prettier
+
+## Release Checklist
+
+- [x] All CLI commands working
+- [x] Cross-platform testing
+- [x] Install scripts tested
+- [x] Documentation complete
+- [x] GitHub release ready
+- [x] ESLint + Prettier configured
+- [x] Memory optimizations implemented
+- [x] Gateway integration (primary + LiteLLM auto-discovery)
+- [x] Per-model gateway cost in `taco models`
+- [x] Gateway `$` column merged into `taco daily`
+- [x] Gateway costs inline in TUI (Overview, Models, Providers tabs)
 
 ## Development
 
@@ -142,43 +374,31 @@ pnpm run format        # Format with Prettier
 pnpm run dev           # Run locally (with Bun)
 ```
 
+## Install Script Architecture
+
+The install scripts (`install.sh` / `install.ps1`) use a two-path strategy:
+
+**Remote install (`curl | bash` / `irm | iex`):**
+
+1. Fetch latest release tag from GitHub API
+2. Download `taco-release-<tag>.tar.gz` from GitHub Releases (contains pre-built `dist/`)
+3. Extract and run installer from within the archive
+4. Copy `dist/` to `~/.taco/`, run `npm install --omit=dev` (Node only, installs sql.js etc.)
+5. Create launcher script pointing at `dist/bin/taco.js`
+
+**Local install (from source clone):**
+
+1. Detect `tsconfig.json` → run `pnpm run build` (or `npm run build`)
+2. Same copy + install steps
+
+Bun users skip the `npm install` step — Bun resolves deps natively.
+
+**No new installation steps needed for gateway features** — gateway code is compiled into `dist/` and ships as part of the normal tarball. No new npm dependencies.
+
 ## CI/CD
 
 - **Test Matrix:** Ubuntu, Windows, macOS × Node.js 18, 20, 22
 - **Build:** Cross-platform executables (Linux x64, Windows x64, macOS x64/ARM64)
 - **Release:** GitHub releases with binaries and source archive
 - **Publish:** npm registry
-
-## Release Checklist
-
-- [x] All CLI commands working
-- [x] Cross-platform testing
-- [x] Install scripts tested
-- [x] Documentation complete
-- [x] GitHub release ready
-- [x] ESLint + Prettier configured
-- [x] Memory optimizations implemented
-
-## Future Ideas (Not Critical)
-
-- Sixel pixel art for creature
-- Multi-currency support
-- MCP server integration
-- More creature species
-- Real-time monitoring mode
-
-## Historical Context
-
-This project started as a two-component system (TypeScript plugin + Go daemon) but was simplified to a single TypeScript CLI that reads OpenCode's database directly. The original design docs (REQUIREMENT.md, ROADMAP.md, etc.) are preserved in git history but removed from the working tree to reduce clutter.
-
-**Key Decision:** Reading the DB directly is simpler than maintaining a daemon and plugin architecture. No TCP sockets, no IPC, no background processes. Just a CLI tool that queries data and shows charts.
-
-**Memory Crisis Resolution:** A 32GB memory overflow led to major refactoring:
-- Replaced `.all()` with `.iterate()` for streaming
-- Added SQLite-native aggregations
-- Implemented query limits and default date windows
-- Cache now stores aggregates instead of full events
-
----
-
-**Status:** Production ready! 🚀
+- **Manual Release:** GitHub Actions supports `workflow_dispatch` with a version input
