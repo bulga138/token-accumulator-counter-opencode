@@ -193,8 +193,10 @@ Auth supports: `bearer`, `basic`, and custom `header` types. API key values can 
 ### Commands
 
 ```bash
+taco config gateway --setup        # Interactive configuration wizard
 taco config gateway --status       # Show current config
 taco config gateway --test         # Fetch and display live metrics
+taco config gateway --validate     # Validate config without fetching live data
 taco config gateway --clear-cache  # Force refresh on next run
 taco config gateway --disable      # Remove gateway config
 ```
@@ -202,7 +204,9 @@ taco config gateway --disable      # Remove gateway config
 ### Caching
 
 - **Live data** is cached for `cacheTtlMinutes` (default: 15 min) so running `taco` frequently doesn't spam the gateway
-- **Daily snapshots** (`~/.cache/taco/gateway-daily/YYYY-MM-DD.json`) are written after each fetch and kept permanently — past days' costs don't change
+- **Daily snapshots** (`~/.cache/taco/gateway-daily/YYYY-MM-DD.json`) are written after each successful fetch
+- **Cache rotation:** Files older than 90 days are automatically deleted to prevent unbounded disk usage
+- **Security:** Cache files use restrictive permissions (0600) so only you can read them
 
 ## How it works
 

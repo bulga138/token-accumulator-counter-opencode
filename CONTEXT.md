@@ -197,6 +197,13 @@ When modifying these files, also update:
 - All file paths must use cross-platform utilities (no hardcoded `/` or `\`)
 - **Package Manager Support:** Must work with pnpm, npm, and yarn (no lockfile-specific features)
 
+**Security & Privacy:**
+
+- **Error Sanitization:** All error messages are sanitized to remove sensitive data (URLs, API keys, tokens). Use `sanitizeErrorMessage()` from `src/utils/error-sanitization.js` when displaying errors.
+- **Cache Permissions:** Cache files use restrictive permissions (0600) to prevent other users from reading spend data.
+- **Database Retry:** Automatic retry with exponential backoff for "database is locked" errors (3 attempts: 100ms, 500ms, 1000ms).
+- **Schema Detection:** Database schema is validated on startup to detect OpenCode schema changes that might affect TACO.
+
 ## API Gateway Integration
 
 TACO can fetch real cost data from an API gateway (LiteLLM, OpenRouter, or any custom JSON endpoint) and display it alongside OpenCode's local estimates.
@@ -250,6 +257,29 @@ Configured via `taco config gateway --setup`. Uses JSONPath mappings so it works
 
 Auth supports: `bearer`, `basic`, custom `header`. API key values use `"${ENV_VAR}"` references so secrets are never stored.
 
+### Configuration Validation
+
+Gateway configuration is validated before saving to catch errors early:
+
+**Validation checks:**
+
+- Endpoint URL format (must be valid HTTP/HTTPS)
+- Auth type and required fields
+- JSONPath syntax (must start with `$.`, no wildcards/filters)
+- Cache TTL (must be non-negative number)
+
+**Commands:**
+
+- `taco config gateway --setup` - Interactive wizard with validation
+- `taco config gateway --validate` - Validate existing config without fetching live data
+- `taco config gateway --test` - Validate + test with live endpoint
+
+**Key Functions:**
+
+- `validateGatewayConfig(config)` - Validates complete config structure
+- `testJsonPathMappings(mappings, sampleData)` - Tests mappings against sample JSON
+- `formatValidationErrors(errors)` - Formats errors for display
+
 ### LiteLLM Auto-Discovery
 
 When the gateway is LiteLLM-compliant (LiteLLM proxy, OpenRouter, or compatible), TACO automatically derives the base URL from the configured endpoint and probes standard paths — no additional configuration needed:
@@ -301,8 +331,12 @@ Normalization steps: strip provider prefix → strip version suffix → replace 
 ├── gateway-daily-activity.json  TTL: 60 min  /user/daily/activity breakdown
 │                                             (past date ranges: 24h — immutable)
 └── gateway-daily/
-    └── YYYY-MM-DD.json          Permanent    Daily aggregate snapshots (never expire)
+    └── YYYY-MM-DD.json          90 days     Daily aggregate snapshots (auto-rotated)
 ```
+
+**Cache Rotation:** Daily snapshots older than 90 days are automatically deleted to prevent unbounded disk usage. Rotation runs asynchronously after each write.
+
+**File Permissions:** Cache directory is created with `0o700` (owner-only), files with `0o600` (owner read/write only) for security.
 
 ## Common Modification Patterns
 
@@ -333,6 +367,33 @@ Normalization steps: strip provider prefix → strip version suffix → replace 
 2. Update `getConfig()` and `saveConfig()` if needed
 3. Add to `taco config` command in `src/cli/commands/config-cmd.ts`
 4. Document in README.md
+
+**Adding cache functionality:**
+
+1. Use `ensureDir()` from `src/data/gateway-cache.ts` for directory creation (handles permissions)
+2. Set file permissions to 0600 after writing sensitive data
+3. Implement rotation logic for cleanup of old files
+4. Use `setImmediate()` for async cleanup to avoid blocking
+
+**Adding error handling:**
+
+1. Use `sanitizeErrorMessage()` from `src/utils/error-sanitization.js` when displaying errors
+2. Use `sanitizeError()` to sanitize Error objects while preserving stack traces
+3. Never log full URLs, API keys, or tokens in error messages
+
+**Adding database functionality:**
+
+1. Use `verifyDatabaseAccess()` to test DB connectivity before operations
+2. Use `getDbAsync()` with retry logic for automatic handling of locked DB
+3. Use `detectSchema()` to validate OpenCode schema compatibility
+4. Check for column existence with `hasColumn()` before using new fields
+
+**Adding gateway validation:**
+
+1. Use `validateGatewayConfig()` before saving config
+2. Use `testJsonPathMappings()` to test against sample responses
+3. Provide clear error messages with `formatValidationErrors()`
+4. Test connectivity after validation passes
 
 ## Technical Stack
 
