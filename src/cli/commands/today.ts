@@ -45,7 +45,6 @@ export function registerTodayCommand(program: Command): void {
     // Today in local time
     const todayStr = new Date().toLocaleDateString('en-CA') // YYYY-MM-DD
     const todayStart = new Date(todayStr + 'T00:00:00')
-    const todayEnd = new Date(todayStr + 'T23:59:59.999')
 
     const filters = buildFilters({ from: todayStr, to: todayStr })
     const events = loadUsageEvents(db, filters)
@@ -117,7 +116,7 @@ export function registerTodayCommand(program: Command): void {
         const pct = ((overview.cost / config.budget.daily) * 100).toFixed(1)
         const msg = `Daily budget: ${formatCost(overview.cost)} / ${formatCost(config.budget.daily)} (${pct}%)`
         if (overview.cost >= config.budget.daily * 0.8) {
-          lines.push(useColor ? chalk.yellow(`  ⚠  ${msg}`) : `  WARN: ${msg}`)
+          lines.push(useColor ? chalk.yellow(`  !  ${msg}`) : `  WARN: ${msg}`)
         } else {
           lines.push(`  ✓  ${msg}`)
         }

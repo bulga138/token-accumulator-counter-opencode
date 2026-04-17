@@ -6,11 +6,6 @@ import { computeModelStats } from '../../aggregator/index.js'
 import { addFilterFlags, buildRangeLabel } from '../filters.js'
 import { getConfig } from '../../config/index.js'
 import chalk from 'chalk'
-import {
-  formatTokens,
-  formatCost,
-  formatPercent,
-} from '../../utils/formatting.js'
 import { getColors } from '../../theme/index.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -95,17 +90,25 @@ function computeHealth(events: import('../../data/types.js').UsageEvent[]): Heal
   // Anomalies
   const anomalies: string[] = []
   if (globalErrorRate > 0.05) {
-    anomalies.push(`Global error rate is ${(globalErrorRate * 100).toFixed(1)}% — above 5% threshold`)
+    anomalies.push(
+      `Global error rate is ${(globalErrorRate * 100).toFixed(1)}% — above 5% threshold`
+    )
   }
-  if (globalLengthRate > 0.10) {
-    anomalies.push(`Length truncation rate is ${(globalLengthRate * 100).toFixed(1)}% — above 10% threshold`)
+  if (globalLengthRate > 0.1) {
+    anomalies.push(
+      `Length truncation rate is ${(globalLengthRate * 100).toFixed(1)}% — above 10% threshold`
+    )
   }
   for (const m of perModel) {
-    if (m.errorRate > 0.10) {
-      anomalies.push(`${m.modelId}: error rate ${(m.errorRate * 100).toFixed(1)}% — above 10% threshold`)
+    if (m.errorRate > 0.1) {
+      anomalies.push(
+        `${m.modelId}: error rate ${(m.errorRate * 100).toFixed(1)}% — above 10% threshold`
+      )
     }
     if (m.lengthRate > 0.15) {
-      anomalies.push(`${m.modelId}: truncation rate ${(m.lengthRate * 100).toFixed(1)}% — consider raising max_tokens`)
+      anomalies.push(
+        `${m.modelId}: truncation rate ${(m.lengthRate * 100).toFixed(1)}% — consider raising max_tokens`
+      )
     }
   }
 
@@ -147,10 +150,14 @@ function formatHealthVisual(report: HealthReport, rangeLabel: string): string {
     const cnt = String(r.count).padStart(8)
     const label = r.reason.padEnd(16)
     const warn =
-      (['error', 'timeout', 'content_filter'].includes(r.reason) && r.percent > 0.05)
-        ? useColor ? chalk.red(' ⚠') : ' ⚠'
-        : r.reason === 'length' && r.percent > 0.10
-          ? useColor ? chalk.yellow(' ⚠') : ' ⚠'
+      ['error', 'timeout', 'content_filter'].includes(r.reason) && r.percent > 0.05
+        ? useColor
+          ? chalk.red(' !')
+          : ' !'
+        : r.reason === 'length' && r.percent > 0.1
+          ? useColor
+            ? chalk.yellow(' !')
+            : ' !'
           : ''
     lines.push(`    ${label} ${cnt}  (${pct})${warn}`)
   }
@@ -167,7 +174,7 @@ function formatHealthVisual(report: HealthReport, rangeLabel: string): string {
   } else {
     lines.push(errMsg)
   }
-  if (report.globalLengthRate > 0.10) {
+  if (report.globalLengthRate > 0.1) {
     lines.push(useColor ? chalk.yellow(lenMsg) : lenMsg)
   } else {
     lines.push(lenMsg)
@@ -198,7 +205,7 @@ function formatHealthVisual(report: HealthReport, rangeLabel: string): string {
     lines.push('  Anomalies')
     lines.push('  ' + div)
     for (const a of report.anomalies) {
-      const prefix = useColor ? chalk.yellow('  ⚠ ') : '  ⚠ '
+      const prefix = useColor ? chalk.yellow('  ! ') : '  ! '
       lines.push(prefix + a)
     }
     lines.push('')

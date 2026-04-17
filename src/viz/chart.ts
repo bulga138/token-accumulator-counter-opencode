@@ -4,6 +4,7 @@ import dayjs from 'dayjs'
 import type { DailySeries, ModelStats } from '../data/types.js'
 
 import { formatTokens, formatCost, formatPercent, formatTps } from '../utils/formatting.js'
+import { normalizeModelName } from '../utils/model-names.js'
 import { detectTheme } from '../theme/index.js'
 
 const SERIES_COLORS = [
@@ -173,8 +174,6 @@ export function renderModelPanels(
     // Look up gateway cost for this model
     let gatewayCostStr = ''
     if (gatewaySpend) {
-      const { normalizeModelName } =
-        require('../utils/model-names.js') as typeof import('../utils/model-names.js')
       const normalized = normalizeModelName(model.modelId)
       let gwCost: number | undefined = gatewaySpend.get(normalized)
       if (gwCost === undefined) {
