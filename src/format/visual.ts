@@ -11,6 +11,7 @@ import type {
   PeriodStats,
 } from '../data/types.js'
 import type { HeatmapDay } from '../aggregator/index.js'
+import type { GatewayDailyActivity, GatewayMetrics } from '../data/gateway-types.js'
 import type { DailySeries } from '../data/types.js'
 import { renderHeatmap } from '../viz/heatmap.js'
 import { renderTotalChart, renderModelPanels } from '../viz/chart.js'
@@ -50,7 +51,8 @@ export function formatOverview(
   stats: OverviewStats,
   heatmap: HeatmapDay[],
   rangeLabel: string,
-  dailySeries?: DailySeries[]
+  dailySeries?: DailySeries[],
+  gatewayMetrics?: GatewayMetrics | null
 ): string {
   const lines: string[] = []
 
@@ -126,9 +128,29 @@ export function formatOverview(
   const totalTok = formatTokens(stats.tokens.total)
 
   lines.push(kv('Favorite model', fav, 'Total tokens', totalTok))
-  lines.push(
-    kv('Total cost', formatCost(stats.cost), 'Avg cost/day', formatCost(stats.avgCostPerDay))
-  )
+  if (gatewayMetrics) {
+    // Show local and gateway costs side by side
+    lines.push(
+      kv(
+        'Local cost',
+        formatCost(stats.cost),
+        'Gateway cost',
+        formatCost(gatewayMetrics.totalSpend)
+      )
+    )
+    lines.push(
+      kv(
+        'Avg cost/day (local)',
+        formatCost(stats.avgCostPerDay),
+        'Avg cost/day (gw)',
+        formatCost(gatewayMetrics.totalSpend / Math.max(stats.activedays, 1))
+      )
+    )
+  } else {
+    lines.push(
+      kv('Total cost', formatCost(stats.cost), 'Avg cost/day', formatCost(stats.avgCostPerDay))
+    )
+  }
   lines.push('')
   lines.push(
     kv(
@@ -182,7 +204,6 @@ export function formatOverview(
   }
 
   lines.push('')
-
   return lines.join('\n')
 }
 
@@ -206,7 +227,11 @@ export function formatModels(models: ModelStats[], rangeLabel: string): string {
 
 // ─── Providers ────────────────────────────────────────────────────────────────
 
-export function formatProviders(providers: ProviderStats[], rangeLabel: string): string {
+export function formatProviders(
+  providers: ProviderStats[],
+  rangeLabel: string,
+  gatewayTotalSpend?: number | null
+): string {
   const lines: string[] = []
   lines.push(header(`Providers${rangeLabel ? ' · ' + rangeLabel : ''}`))
 
@@ -215,38 +240,52 @@ export function formatProviders(providers: ProviderStats[], rangeLabel: string):
     return lines.join('\n')
   }
 
-  lines.push(
-    ...buildTable<ProviderStats>(
-      [
-        {
-          header: 'Provider',
-          align: 'left',
-          width: 'flex',
-          minWidth: 10,
-          maxWidth: 25,
-          render: r => r.providerId,
-        },
-        { header: 'Tokens', align: 'right', width: 12, render: r => formatTokens(r.tokens.total) },
-        { header: 'Cost', align: 'right', width: 10, render: r => formatCost(r.cost) },
-        {
-          header: '',
-          align: 'left',
-          width: 20,
-          priority: 1,
-          render: (r, w) => renderBar(r.percentage, useColor, w ?? 20),
-        },
-        {
-          header: 'Share',
-          align: 'right',
-          width: 7,
-          priority: 1,
-          render: r => formatPercent(r.percentage),
-        },
-      ],
-      providers,
-      { useColor }
-    )
-  )
+  const providerColumns: Parameters<typeof buildTable<ProviderStats>>[0] = [
+    {
+      header: 'Provider',
+      align: 'left',
+      width: 'flex',
+      minWidth: 10,
+      maxWidth: 25,
+      render: r => r.providerId,
+    },
+    { header: 'Tokens', align: 'right', width: 12, render: r => formatTokens(r.tokens.total) },
+    {
+      header: gatewayTotalSpend != null ? 'Local $' : 'Cost',
+      align: 'right',
+      width: 10,
+      render: r => formatCost(r.cost),
+    },
+    ...(gatewayTotalSpend != null
+      ? [
+          {
+            header: 'Gateway $',
+            align: 'right' as const,
+            width: 11,
+            render: (r: ProviderStats) =>
+              r.cost > 0 && r.cost >= (providers[0]?.cost ?? 0) * 0.5
+                ? formatCost(gatewayTotalSpend!)
+                : '—',
+          },
+        ]
+      : []),
+    {
+      header: '',
+      align: 'left',
+      width: 20,
+      priority: 1,
+      render: (r: ProviderStats, w?: number) => renderBar(r.percentage, useColor, w ?? 20),
+    },
+    {
+      header: 'Share',
+      align: 'right',
+      width: 7,
+      priority: 1,
+      render: r => formatPercent(r.percentage),
+    },
+  ]
+
+  lines.push(...buildTable<ProviderStats>(providerColumns, providers, { useColor }))
 
   lines.push('')
   return lines.join('\n')
@@ -257,7 +296,8 @@ export function formatProviders(providers: ProviderStats[], rangeLabel: string):
 export function formatDaily(
   daily: DailyStats[],
   rangeLabel: string,
-  dailySeries?: DailySeries[]
+  dailySeries?: DailySeries[],
+  gatewayDays?: GatewayDailyActivity[] | null
 ): string {
   const lines: string[] = []
   lines.push(header(`Daily Usage${rangeLabel ? ' · ' + rangeLabel : ''}`))
@@ -290,26 +330,43 @@ export function formatDaily(
     lines.push('')
   }
 
-  lines.push(
-    ...buildTable<DailyStats>(
-      [
-        {
-          header: 'Date',
-          align: 'left',
-          width: 'flex',
-          minWidth: 10,
-          maxWidth: 10,
-          render: r => r.date,
-        },
-        { header: 'Sessions', align: 'right', width: 10, render: r => String(r.sessionCount) },
-        { header: 'Messages', align: 'right', width: 10, render: r => String(r.messageCount) },
-        { header: 'Tokens', align: 'right', width: 12, render: r => formatTokens(r.tokens.total) },
-        { header: 'Cost', align: 'right', width: 10, render: r => formatCost(r.cost) },
-      ],
-      daily,
-      { useColor }
-    )
-  )
+  // Build a lookup map from date → gateway spend
+  const gwDayMap = new Map<string, number>()
+  if (gatewayDays) {
+    for (const d of gatewayDays) {
+      gwDayMap.set(d.date, d.totalSpend)
+    }
+  }
+
+  const columns: Parameters<typeof buildTable<DailyStats>>[0] = [
+    {
+      header: 'Date',
+      align: 'left',
+      width: 'flex',
+      minWidth: 10,
+      maxWidth: 10,
+      render: r => r.date,
+    },
+    { header: 'Sessions', align: 'right', width: 10, render: r => String(r.sessionCount) },
+    { header: 'Messages', align: 'right', width: 10, render: r => String(r.messageCount) },
+    { header: 'Tokens', align: 'right', width: 12, render: r => formatTokens(r.tokens.total) },
+    { header: 'Local $', align: 'right', width: 10, render: r => formatCost(r.cost) },
+  ]
+
+  // Add gateway cost column when data is available
+  if (gwDayMap.size > 0) {
+    columns.push({
+      header: 'Gateway $',
+      align: 'right',
+      width: 11,
+      render: r => {
+        const gw = gwDayMap.get(r.date)
+        return gw !== undefined ? formatCost(gw) : '—'
+      },
+    })
+  }
+
+  lines.push(...buildTable<DailyStats>(columns, daily, { useColor }))
 
   lines.push('')
   return lines.join('\n')
@@ -450,7 +507,12 @@ export function formatAgents(agents: AgentStats[], rangeLabel: string): string {
 
 // ─── Trends ───────────────────────────────────────────────────────────────────
 
-export function formatTrends(trends: PeriodStats[], period: string, rangeLabel: string): string {
+export function formatTrends(
+  trends: PeriodStats[],
+  period: string,
+  rangeLabel: string,
+  gatewayTotalSpend?: number | null
+): string {
   const lines: string[] = []
   lines.push(header(`Trends · ${period}${rangeLabel ? ' · ' + rangeLabel : ''}`))
 
@@ -486,6 +548,16 @@ export function formatTrends(trends: PeriodStats[], period: string, rangeLabel: 
       { useColor }
     )
   )
+
+  // Gateway total note — period-level breakdown not available, show overall total
+  if (gatewayTotalSpend != null) {
+    const localTotal = trends.reduce((s, t) => s + t.cost, 0)
+    const dim = (s: string) => (useColor ? chalk.dim(s) : s)
+    lines.push(
+      dim(`  Gateway total (all periods): ${formatCost(gatewayTotalSpend)}`) +
+        dim(`   vs local: ${formatCost(localTotal)}`)
+    )
+  }
 
   lines.push('')
   return lines.join('\n')

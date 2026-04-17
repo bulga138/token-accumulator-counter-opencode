@@ -9,33 +9,47 @@ import type {
   SessionStats,
   PeriodStats,
 } from '../data/types.js'
+import type { GatewayMetrics } from '../data/gateway-types.js'
 
 function csvStringify(data: object[]): string {
   return stringify(data, { header: true })
 }
 
-export function formatOverviewCsv(stats: OverviewStats): string {
-  return csvStringify([
-    {
-      tokens_total: stats.tokens.total,
-      tokens_input: stats.tokens.input,
-      tokens_output: stats.tokens.output,
-      tokens_cache_read: stats.tokens.cacheRead,
-      tokens_cache_write: stats.tokens.cacheWrite,
-      tokens_reasoning: stats.tokens.reasoning,
-      cost_usd: stats.cost,
-      session_count: stats.sessionCount,
-      message_count: stats.messageCount,
-      active_days: stats.activedays,
-      total_days: stats.totalDays,
-      favorite_model: stats.favoriteModel ?? '',
-      current_streak: stats.currentStreak,
-      longest_streak: stats.longestStreak,
-      most_active_day: stats.mostActiveDay ?? '',
-      longest_session_ms: stats.longestSessionMs,
-      avg_cost_per_day: stats.avgCostPerDay,
-    },
-  ])
+export function formatOverviewCsv(stats: OverviewStats, gateway?: GatewayMetrics | null): string {
+  const row: Record<string, unknown> = {
+    tokens_total: stats.tokens.total,
+    tokens_input: stats.tokens.input,
+    tokens_output: stats.tokens.output,
+    tokens_cache_read: stats.tokens.cacheRead,
+    tokens_cache_write: stats.tokens.cacheWrite,
+    tokens_reasoning: stats.tokens.reasoning,
+    cost_usd: stats.cost,
+    session_count: stats.sessionCount,
+    message_count: stats.messageCount,
+    active_days: stats.activedays,
+    total_days: stats.totalDays,
+    favorite_model: stats.favoriteModel ?? '',
+    current_streak: stats.currentStreak,
+    longest_streak: stats.longestStreak,
+    most_active_day: stats.mostActiveDay ?? '',
+    longest_session_ms: stats.longestSessionMs,
+    avg_cost_per_day: stats.avgCostPerDay,
+  }
+
+  if (gateway) {
+    row.gateway_spend = gateway.totalSpend
+    row.gateway_budget = gateway.budgetLimit ?? ''
+    row.gateway_budget_pct =
+      gateway.budgetLimit !== null
+        ? ((gateway.totalSpend / gateway.budgetLimit) * 100).toFixed(1)
+        : ''
+    row.gateway_team_spend = gateway.teamSpend ?? ''
+    row.gateway_team_budget = gateway.teamBudgetLimit ?? ''
+    row.gateway_reset_at = gateway.budgetResetAt ?? ''
+    row.gateway_source = gateway.endpoint
+  }
+
+  return csvStringify([row])
 }
 
 export function formatModelsCsv(models: ModelStats[]): string {

@@ -9,9 +9,18 @@ import type {
   PeriodStats,
 } from '../data/types.js'
 import type { HeatmapDay } from '../aggregator/index.js'
+import type { GatewayMetrics } from '../data/gateway-types.js'
 
-export function formatOverviewJson(stats: OverviewStats, _heatmap: HeatmapDay[]): string {
-  return JSON.stringify(stats, null, 2)
+export function formatOverviewJson(
+  stats: OverviewStats,
+  _heatmap: HeatmapDay[],
+  gateway?: GatewayMetrics | null
+): string {
+  const out: Record<string, unknown> = { ...stats }
+  if (gateway !== undefined && gateway !== null) {
+    out.gateway = gateway
+  }
+  return JSON.stringify(out, null, 2)
 }
 
 export function formatModelsJson(models: ModelStats[]): string {

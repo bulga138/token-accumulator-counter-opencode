@@ -110,7 +110,8 @@ export function renderModelPanels(
   models: ModelStats[],
   width = 62,
   height = 4,
-  useColor = true
+  useColor = true,
+  gatewaySpend?: Map<string, number> | null
 ): string[] {
   if (models.length === 0) return ['(no data)']
 
@@ -168,8 +169,30 @@ export function renderModelPanels(
     const indent = '  ' + ' '.repeat(Y_LABEL_WIDTH + 2)
 
     const costStr = model.billedExternally ? 'billed via plan' : formatCost(model.cost)
+
+    // Look up gateway cost for this model
+    let gatewayCostStr = ''
+    if (gatewaySpend) {
+      const { normalizeModelName } =
+        require('../utils/model-names.js') as typeof import('../utils/model-names.js')
+      const normalized = normalizeModelName(model.modelId)
+      let gwCost: number | undefined = gatewaySpend.get(normalized)
+      if (gwCost === undefined) {
+        for (const [key, val] of gatewaySpend) {
+          const nk = normalizeModelName(key)
+          if (nk === normalized || nk.startsWith(normalized) || normalized.startsWith(nk)) {
+            gwCost = (gwCost ?? 0) + val
+          }
+        }
+      }
+      if (gwCost !== undefined) {
+        gatewayCostStr = `  ${dim('GW:')} ${formatCost(gwCost)}`
+      }
+    }
+
+    const costLabel = gatewaySpend ? 'Local $:' : 'Cost:'
     const statParts: string[] = [
-      `${dim('Cost:')} ${costStr}`,
+      `${dim(costLabel)} ${costStr}${gatewayCostStr}`,
       `${dim('In:')} ${formatTokens(model.tokens.input)}`,
       `${dim('Out:')} ${formatTokens(model.tokens.output)}`,
       `${dim('Cache:')} ${formatTokens(model.tokens.cacheRead)}`,
