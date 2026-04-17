@@ -9,7 +9,8 @@
 
 param(
     [switch]$System,
-    [switch]$Help
+    [switch]$Help,
+    [switch]$PreferSource
 )
 
 # --- Remote bootstrap: detect piped execution (irm | iex) ---
@@ -66,12 +67,14 @@ Usage: .\install.ps1 [OPTIONS]
 Install TACO CLI for OpenCode telemetry tracking.
 
 Options:
-  -System    Install system-wide (requires admin, goes to C:\Program Files\taco)
-  -Help      Show this help message
+  -System         Install system-wide (requires admin, goes to C:\Program Files\taco)
+  -PreferSource   Build from source instead of downloading binary
+  -Help           Show this help message
 
 Examples:
   .\install.ps1              # User install to ~/.taco (recommended)
   .\install.ps1 -System     # System-wide install
+  .\install.ps1 -PreferSource  # Build from source
 "@
     exit 0
 }
@@ -144,9 +147,85 @@ function Prompt-InstallBun {
     }
 }
 
+# --- Detect Architecture ---
+function Get-Architecture {
+    $arch = $env:PROCESSOR_ARCHITECTURE
+    switch ($arch) {
+        "AMD64" { return "x64" }
+        "ARM64" { return "arm64" }
+        default { return "unknown" }
+    }
+}
+
+$OS = "windows"
+$Arch = Get-Architecture
+
+# --- Try to download pre-built binary ---
+function Download-Binary {
+    param($Version, $InstallDir)
+    
+    $Repo = "bulga138/token-accumulator-counter-opencode"
+    $BinaryName = "taco-${Version}-${OS}-${Arch}.exe"
+    $BinaryUrl = "https://github.com/$Repo/releases/download/$Version/$BinaryName"
+    $ChecksumUrl = "https://github.com/$Repo/releases/download/$Version/${BinaryName}.sha256"
+    
+    Info "Checking for pre-built binary: $BinaryName..."
+    
+    try {
+        # Check if binary exists
+        $response = Invoke-WebRequest -Uri $BinaryUrl -Method Head -ErrorAction Stop -TimeoutSec 10
+        if ($response.StatusCode -eq 200) {
+            Info "Downloading pre-built binary..."
+            $TmpFile = Join-Path $InstallDir "$BinaryName.tmp"
+            
+            try {
+                Invoke-WebRequest -Uri $BinaryUrl -OutFile $TmpFile -ErrorAction Stop -TimeoutSec 300
+                
+                # Download and verify checksum if available
+                $ChecksumFile = Join-Path $InstallDir "$BinaryName.sha256"
+                try {
+                    Invoke-WebRequest -Uri $ChecksumUrl -OutFile $ChecksumFile -ErrorAction Stop -TimeoutSec 30
+                    Info "Verifying checksum..."
+                    
+                    $ExpectedChecksum = (Get-Content $ChecksumFile -Raw).Trim().Split()[0]
+                    $ActualChecksum = (Get-FileHash $TmpFile -Algorithm SHA256).Hash.ToLower()
+                    
+                    if ($ExpectedChecksum -eq $ActualChecksum) {
+                        Success "Checksum verified"
+                    } else {
+                        Warn "Checksum mismatch! Expected: $ExpectedChecksum, Got: $ActualChecksum"
+                        Warn "Binary may be corrupted, falling back to source build"
+                        Remove-Item $TmpFile -Force -ErrorAction SilentlyContinue
+                        Remove-Item $ChecksumFile -Force -ErrorAction SilentlyContinue
+                        return $false
+                    }
+                    Remove-Item $ChecksumFile -Force -ErrorAction SilentlyContinue
+                } catch {
+                    Info "No checksum file available, skipping verification"
+                }
+                
+                $FinalPath = Join-Path $InstallDir "taco.exe"
+                Move-Item -Path $TmpFile -Destination $FinalPath -Force
+                Success "Binary installed: $FinalPath"
+                return $true
+            } catch {
+                Warn "Download failed: $_. Will build from source instead"
+                if (Test-Path $TmpFile) { Remove-Item $TmpFile -Force }
+                return $false
+            }
+        }
+    } catch {
+        Info "No pre-built binary for ${OS}-${Arch} (HTTP error), building from source"
+        return $false
+    }
+    
+    return $false
+}
+
 Write-Host ""
 Write-Host "${Bold}🌮 Installing TACO${Reset}"
 Write-Host ""
+Info "Detected platform: ${OS}-${Arch}"
 
 # Get script directory
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -198,37 +277,46 @@ if ($System) {
 
 Info "Installation directory: $InstallDir"
 
-# Build from source
-# Always rebuild when running from a repo checkout (tsconfig.json present).
-# This prevents the stale-install problem where dist/ exists from a previous
-# build but the source has since been edited — the old guard
-# `-not (Test-Path dist)` would silently copy stale compiled output.
-# If running from a pre-built release archive (no tsconfig.json), use the
-# dist/ that shipped with the archive, failing if it is missing.
-if (Test-Path "$ScriptDir\tsconfig.json") {
-    Info "Building from source..."
+# --- Try binary download first ---
+$BinaryInstalled = $false
+if (-not $PreferSource -and $LatestTag) {
+    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+    if (Download-Binary -Version $LatestTag -InstallDir $InstallDir) {
+        $BinaryInstalled = $true
+    }
+}
 
-    $PnpmCmd = Get-Command pnpm -ErrorAction SilentlyContinue
-    $NpmCmd  = Get-Command npm  -ErrorAction SilentlyContinue
-
-    if ($PnpmCmd) {
-        $BuildCmd = "pnpm run build"
-    } elseif ($NpmCmd) {
-        $BuildCmd = "npm run build"
+# --- Build from source (fallback) ---
+if (-not $BinaryInstalled) {
+    if ($PreferSource) {
+        Info "Building from source (--PreferSource specified)..."
     } else {
-        Error "Neither pnpm nor npm found. Please install pnpm: https://pnpm.io/installation"
+        Info "Building from source..."
     }
 
-    Push-Location $ScriptDir
-    try {
-        Invoke-Expression $BuildCmd
-        if ($LASTEXITCODE -ne 0) { Error "Build failed" }
-    } finally {
-        Pop-Location
+    if (Test-Path "$ScriptDir\tsconfig.json") {
+        $PnpmCmd = Get-Command pnpm -ErrorAction SilentlyContinue
+        $NpmCmd  = Get-Command npm  -ErrorAction SilentlyContinue
+
+        if ($PnpmCmd) {
+            $BuildCmd = "pnpm run build"
+        } elseif ($NpmCmd) {
+            $BuildCmd = "npm run build"
+        } else {
+            Error "Neither pnpm nor npm found. Please install pnpm: https://pnpm.io/installation"
+        }
+
+        Push-Location $ScriptDir
+        try {
+            Invoke-Expression $BuildCmd
+            if ($LASTEXITCODE -ne 0) { Error "Build failed" }
+        } finally {
+            Pop-Location
+        }
+        Success "Built successfully"
+    } elseif (-not (Test-Path "$ScriptDir\dist")) {
+        Error "No dist/ folder and no source to build from. Please build first: pnpm run build"
     }
-    Success "Built successfully"
-} elseif (-not (Test-Path "$ScriptDir\dist")) {
-    Error "No dist/ folder and no source to build from. Please build first: pnpm run build"
 }
 
 # Install
@@ -238,64 +326,96 @@ Write-Host "${Bold}[1/2] Installing taco...${Reset}"
 # Create install directory
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-# Check for Bun
-$BunCmd = Get-Command bun -ErrorAction SilentlyContinue
-$NodeCmd = Get-Command node -ErrorAction SilentlyContinue
-
-if ($BunCmd) {
-    Info "Bun detected - using Bun for faster performance"
-    $Runtime = "bun"
-    $RunCmd = "bun run"
-} elseif ($NodeCmd) {
-    $Runtime = "node"
-    $RunCmd = "node"
+# If we have a standalone binary, we're done
+if ($BinaryInstalled) {
+    Info "Pre-built binary installed, setting up runtime..."
+    
+    # Copy minimal files needed for the binary to work
+    Copy-Item -Path "$ScriptDir\package.json" -Destination $InstallDir -Force -ErrorAction SilentlyContinue
+    Copy-Item -Path "$ScriptDir\uninstall.ps1" -Destination $InstallDir -Force -ErrorAction SilentlyContinue
+    Copy-Item -Path "$ScriptDir\uninstall.sh" -Destination $InstallDir -Force -ErrorAction SilentlyContinue
+    
+    # Install runtime dependencies non-interactively
+    $NpmCmd = Get-Command npm -ErrorAction SilentlyContinue
+    if ($NpmCmd) {
+        Push-Location $InstallDir
+        try {
+            $null = npm install --omit=dev --silent --no-audit --no-fund 2>&1
+        } catch {
+            # Non-fatal
+        } finally {
+            Pop-Location
+        }
+    }
+    
+    Success "Installed to $InstallDir\taco.exe"
 } else {
-    Error "Neither Bun nor Node.js found. Please install Bun: https://bun.sh or Node.js: https://nodejs.org"
-}
+    # Need runtime wrapper (Node.js/Bun)
+    
+    # Check for Bun
+    $BunCmd = Get-Command bun -ErrorAction SilentlyContinue
+    $NodeCmd = Get-Command node -ErrorAction SilentlyContinue
 
-# Create wrapper scripts
-$TacoWrapper = "$InstallDir\taco.cmd"
-$TacoPs1 = "$InstallDir\taco.ps1"
-$TacoSh = "$InstallDir\taco"
+    if ($BunCmd) {
+        Info "Bun detected - using Bun for faster performance"
+        $Runtime = "bun"
+        $RunCmd = "bun run"
+    } elseif ($NodeCmd) {
+        $Runtime = "node"
+        $RunCmd = "node"
+    } else {
+        Error "Neither Bun nor Node.js found. Please install Bun: https://bun.sh or Node.js: https://nodejs.org"
+    }
 
-# CMD wrapper (for Windows Command Prompt)
-@"
+    # Create wrapper scripts
+    $TacoWrapper = "$InstallDir\taco.cmd"
+    $TacoPs1 = "$InstallDir\taco.ps1"
+    $TacoSh = "$InstallDir\taco"
+
+    # CMD wrapper (for Windows Command Prompt)
+    @"
 @echo off
 $RunCmd "$InstallDir\dist\bin\taco.js" %*
 "@ | Set-Content -Path $TacoWrapper -Encoding ASCII
 
-# PowerShell wrapper
-@"
+    # PowerShell wrapper
+    @"
 #!/usr/bin/env pwsh
 $RunCmd '$InstallDir\dist\bin\taco.js' @args
 "@ | Set-Content -Path $TacoPs1 -Encoding UTF8
 
-# Shell wrapper (for Git Bash)
-@"
+    # Shell wrapper (for Git Bash)
+    @"
 #!/bin/sh
 exec $RunCmd "$InstallDir/dist/bin/taco.js" "`$@"
 "@ | Set-Content -Path $TacoSh -Encoding UTF8
 
-# Remove stale dist before copying so no old compiled files survive a rename/delete.
-if (Test-Path "$InstallDir\dist") {
-    Remove-Item -Path "$InstallDir\dist" -Recurse -Force
-}
-Copy-Item -Path "$ScriptDir\dist" -Destination $InstallDir -Recurse -Force
+    # Remove stale dist before copying so no old compiled files survive a rename/delete.
+    if (Test-Path "$InstallDir\dist") {
+        Remove-Item -Path "$InstallDir\dist" -Recurse -Force
+    }
+    Copy-Item -Path "$ScriptDir\dist" -Destination $InstallDir -Recurse -Force
 
-# Copy package.json, uninstall script, and install dependencies
-Copy-Item -Path "$ScriptDir\package.json" -Destination $InstallDir -Force
-if (Test-Path "$ScriptDir\uninstall.sh") {
-    Copy-Item -Path "$ScriptDir\uninstall.sh" -Destination $InstallDir -Force
-}
-Info "Installing dependencies..."
-Push-Location $InstallDir
-try {
-    $null = npm install --omit=dev --silent 2>&1
-    Info "Dependencies installed"
-} catch {
-    Warn "Failed to install dependencies, TACO may not work properly"
-} finally {
-    Pop-Location
+    # Copy package.json, uninstall scripts, and install dependencies
+    Copy-Item -Path "$ScriptDir\package.json" -Destination $InstallDir -Force
+    if (Test-Path "$ScriptDir\uninstall.ps1") {
+        Copy-Item -Path "$ScriptDir\uninstall.ps1" -Destination $InstallDir -Force
+    }
+    if (Test-Path "$ScriptDir\uninstall.sh") {
+        Copy-Item -Path "$ScriptDir\uninstall.sh" -Destination $InstallDir -Force
+    }
+    Info "Installing dependencies..."
+    Push-Location $InstallDir
+    try {
+        $null = npm install --omit=dev --silent 2>&1
+        Info "Dependencies installed"
+    } catch {
+        Warn "Failed to install dependencies, TACO may not work properly"
+    } finally {
+        Pop-Location
+    }
+
+    Success "Installed to $InstallDir"
 }
 
 Success "Installed to $InstallDir"
@@ -325,6 +445,15 @@ Write-Host "  !taco sessions     # Recent sessions"
 Write-Host "  !taco view         # Full dashboard"
 Write-Host ""
 Write-Host "${Yellow}Note:${Reset} The '!' prefix runs commands locally without sending to AI."
+Write-Host ""
+Write-Host "${Cyan}API Gateway Integration (optional):${Reset}"
+Write-Host ""
+Write-Host "  If your AI traffic goes through a proxy (LiteLLM, OpenRouter, etc.),"
+Write-Host "  configure TACO to show real gateway costs alongside local estimates:"
+Write-Host ""
+Write-Host "    taco config gateway --setup"
+Write-Host ""
+Write-Host "  Works with any JSON endpoint — no hard-coded format."
 
 # Done
 Write-Host ""
@@ -347,7 +476,13 @@ Write-Host ""
 Write-Host ""
 Write-Host "${Bold}Post-install verification${Reset}"
 
-$TacoExe = "$InstallDir\taco.cmd"
+# Determine which executable to check
+if ($BinaryInstalled) {
+    $TacoExe = "$InstallDir\taco.exe"
+} else {
+    $TacoExe = "$InstallDir\taco.cmd"
+}
+
 if (Test-Path $TacoExe) {
     try {
         # Capture the output as a single string
@@ -360,10 +495,10 @@ if (Test-Path $TacoExe) {
             Warn "taco installed but --version check failed"
         }
     } catch {
-        Warn "Could not run taco wrapper at $TacoExe"
+        Warn "Could not run taco at $TacoExe"
     }
 } else {
-    Warn "taco wrapper not found at $TacoExe"
+    Warn "taco not found at $TacoExe"
 }
 
 if (Get-Command bun -ErrorAction SilentlyContinue) {
@@ -379,7 +514,11 @@ if (Get-Command bun -ErrorAction SilentlyContinue) {
 # takes the lightest code path (single SQLite aggregation, no streaming).
 Info "Warming cache..."
 try {
-    & $TacoExe overview --format json 2>&1 | Out-Null
+    if ($BinaryInstalled) {
+        & $TacoExe overview --format json 2>&1 | Out-Null
+    } else {
+        & $TacoExe overview --format json 2>&1 | Out-Null
+    }
     Success "Cache ready"
 } catch {
     # Non-fatal — cache will be built on first use

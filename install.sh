@@ -6,7 +6,7 @@
 # This script installs the TypeScript-based taco CLI
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/main/install.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/master/install.sh | bash
 #   ./install.sh --system   # System-wide install (requires sudo)
 #   ./install.sh --local    # Local install only (default)
 # =============================================================================
@@ -154,26 +154,107 @@ detect_os() {
   esac
 }
 
+# --- Detect Architecture ---
+detect_arch() {
+  local arch
+  arch=$(uname -m)
+  case "$arch" in
+    x86_64|amd64) echo "x64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    *) echo "unknown" ;;
+  esac
+}
+
+# --- Try to download pre-built binary ---
+download_binary() {
+  local version="$1"
+  local install_dir="$2"
+  
+  # Construct binary name: taco-{VERSION}-{OS}-{ARCH}
+  local binary_name="taco-${version}-${OS}-${ARCH}"
+  [[ "$OS" == "windows" ]] && binary_name="${binary_name}.exe"
+  
+  local binary_url="https://github.com/${REPO}/releases/download/${version}/${binary_name}"
+  local checksum_url="https://github.com/${REPO}/releases/download/${version}/${binary_name}.sha256"
+  
+  info "Checking for pre-built binary: ${binary_name}..."
+  
+  # Check if binary exists (HEAD request with retry)
+  local http_code
+  http_code=$(curl -fsSL -o /dev/null -w "%{http_code}" -m 10 "$binary_url" 2>/dev/null) || http_code="000"
+  
+  if [[ "$http_code" == "200" ]]; then
+    info "Downloading pre-built binary..."
+    local tmp_file="${install_dir}/${binary_name}.tmp"
+    
+    if ! curl -fsSL --connect-timeout 30 --max-time 300 "$binary_url" -o "$tmp_file"; then
+      warn "Download failed (HTTP $http_code), will build from source instead"
+      rm -f "$tmp_file"
+      return 1
+    fi
+    
+    # Download and verify checksum if available
+    local checksum_file="${install_dir}/${binary_name}.sha256"
+    if curl -fsSL --connect-timeout 10 -m 30 "$checksum_url" -o "$checksum_file" 2>/dev/null; then
+      info "Verifying checksum..."
+      local expected_checksum=$(awk '{print $1}' "$checksum_file")
+      local actual_checksum=$(sha256sum "$tmp_file" | awk '{print $1}')
+      
+      if [[ "$expected_checksum" == "$actual_checksum" ]]; then
+        success "Checksum verified"
+      else
+        warn "Checksum mismatch! Expected: $expected_checksum, Got: $actual_checksum"
+        warn "Binary may be corrupted, falling back to source build"
+        rm -f "$tmp_file" "$checksum_file"
+        return 1
+      fi
+      rm -f "$checksum_file"
+    else
+      info "No checksum file available, skipping verification"
+    fi
+    
+    # Make executable
+    chmod +x "$tmp_file" 2>/dev/null || true
+    
+    # Move to final location (without .tmp)
+    local final_path="${install_dir}/taco"
+    [[ "$OS" == "windows" ]] && final_path="${final_path}.exe"
+    mv "$tmp_file" "$final_path"
+    
+    success "Binary installed: $final_path"
+    return 0
+  else
+    info "No pre-built binary for ${OS}-${ARCH} (HTTP $http_code), building from source"
+    return 1
+  fi
+}
+
 OS=$(detect_os)
+ARCH=$(detect_arch)
 SYSTEM=false
 LOCAL_INSTALL=true
+PREFER_SOURCE=false
 
 # --- Parse args ---
 for arg in "$@"; do
   case "$arg" in
     --system|-s) SYSTEM=true; LOCAL_INSTALL=false ;;
     --local|-l) LOCAL_INSTALL=true ;;
+    --prefer-source) PREFER_SOURCE=true ;;
     --help|-h)
       echo "Usage: $0 [OPTIONS]"
       echo ""
       echo "Options:"
-      echo "  --system, -s   Install system-wide (requires sudo)"
-      echo "  --local, -l    Install to ~/.local/bin (default)"
-      echo "  --help, -h     Show this help"
+      echo "  --system, -s       Install system-wide (requires sudo)"
+      echo "  --local, -l        Install to ~/.local/bin (default)"
+      echo "  --prefer-source     Build from source instead of downloading binary"
+      echo "  --help, -h         Show this help"
       exit 0
       ;;
   esac
 done
+
+info "Detected platform: ${OS}-${ARCH}"
 
 # --- Check Node.js version ---
 info "Checking Node.js version..."
@@ -221,14 +302,20 @@ else
   INSTALL_DIR="${HOME}/.taco"
 fi
 
-# --- Build from source ---
-# Always rebuild when running from a repo checkout (tsconfig.json present).
-# This prevents the stale-install problem where dist/ exists from a previous
-# build but the source has since been edited — the old guard
-# `if [[ ! -d dist ]]` would silently copy stale compiled output.
-# If we're running from a pre-built release archive (no tsconfig.json), fall
-# back to using the dist/ that came with the archive, failing if it's missing.
-if [[ -f "$REPO_DIR/tsconfig.json" ]]; then
+# --- Try binary download first ---
+BINARY_INSTALLED=false
+if [[ "$PREFER_SOURCE" != "true" ]] && [[ -n "$LATEST_TAG" ]]; then
+  mkdir -p "$INSTALL_DIR"
+  if download_binary "$LATEST_TAG" "$INSTALL_DIR"; then
+    BINARY_INSTALLED=true
+  fi
+fi
+
+# --- Build from source (fallback) ---
+# Skip if binary was already installed
+if [[ "$BINARY_INSTALLED" == "true" ]]; then
+  info "Using pre-built binary, skipping source build"
+elif [[ -f "$REPO_DIR/tsconfig.json" ]]; then
   info "Building from source..."
 
   if ! command -v pnpm &> /dev/null; then
@@ -255,20 +342,41 @@ echo -e "${BOLD}[1/2] Installing taco...${RESET}"
 # Create install directory
 mkdir -p "$INSTALL_DIR"
 
-# Detect runtime (prefer Bun for speed)
-if command -v bun &> /dev/null; then
-  info "Bun detected - using Bun for faster performance"
-  RUNTIME="bun"
-  RUNCMD="bun run"
-elif command -v node &> /dev/null; then
-  RUNTIME="node"
-  RUNCMD="node"
+# If we have a standalone binary, we're done
+if [[ "$BINARY_INSTALLED" == "true" ]]; then
+  info "Pre-built binary installed, setting up runtime..."
+  
+  # Copy minimal files needed for the binary to work
+  cp "$REPO_DIR/package.json" "$INSTALL_DIR/" 2>/dev/null || true
+  cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/" 2>/dev/null || true
+  
+  # Install runtime dependencies non-interactively
+  if command -v npm &>/dev/null; then
+    (cd "$INSTALL_DIR" && npm install --omit=dev --silent --no-audit --no-fund) 2>/dev/null || true
+  fi
+  
+  if [[ "$OS" == "windows" ]]; then
+    success "Installed to $INSTALL_DIR/taco.exe"
+  else
+    success "Installed to $INSTALL_DIR/taco"
+  fi
 else
-  error "Neither Bun nor Node.js found. Please install Bun: https://bun.sh or Node.js: https://nodejs.org"
-fi
+  # Need runtime wrapper (Node.js/Bun)
 
-# Create wrapper script
-TACO_WRAPPER="$INSTALL_DIR/taco"
+  # Detect runtime (prefer Bun for speed)
+  if command -v bun &> /dev/null; then
+    info "Bun detected - using Bun for faster performance"
+    RUNTIME="bun"
+    RUNCMD="bun run"
+  elif command -v node &> /dev/null; then
+    RUNTIME="node"
+    RUNCMD="node"
+  else
+    error "Neither Bun nor Node.js found. Please install Bun: https://bun.sh or Node.js: https://nodejs.org"
+  fi
+
+  # Create wrapper script
+  TACO_WRAPPER="$INSTALL_DIR/taco"
 
 if [[ "$OS" == "windows" ]]; then
   # Windows batch wrapper (for CMD)
@@ -333,6 +441,7 @@ EOF
   fi
 
   success "Installed to $INSTALL_DIR/taco"
+  fi
 fi
 
 # --- Add to PATH ---
