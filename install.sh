@@ -1,12 +1,12 @@
 #!/bin/bash
 # =============================================================================
 # install.sh — Install taco (Token Accumulator Counter)
-# https://github.com/bulga138/token-accumulator-counter-opencode
+# https://github.com/bulga138/taco
 #
 # This script installs the TypeScript-based taco CLI
 #
 # Usage:
-#   curl -sSL https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/master/install.sh | bash
+#   curl -sSL https://raw.githubusercontent.com/bulga138/taco/master/install.sh | bash
 #   ./install.sh --system   # System-wide install (requires sudo)
 #   ./install.sh --local    # Local install only (default)
 # =============================================================================
@@ -17,7 +17,7 @@ set -euo pipefail
 # When piped, BASH_SOURCE[0] is empty — no local repo files exist.
 # Download the latest release archive and re-exec from the extracted dir.
 if [[ -z "${BASH_SOURCE[0]:-}" ]] || [[ "${BASH_SOURCE[0]}" == "bash" ]]; then
-  REPO="bulga138/token-accumulator-counter-opencode"
+  REPO="bulga138/taco"
   GITHUB_API="https://api.github.com/repos/${REPO}/releases/latest"
 
   command -v curl &>/dev/null || { echo "Error: curl is required"; exit 1; }

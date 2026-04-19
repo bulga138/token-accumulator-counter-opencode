@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Install TACO (Token Accumulator Counter) for OpenCode
-# https://github.com/bulga138/token-accumulator-counter-opencode
+# https://github.com/bulga138/taco
 #
 # Usage:
 #   .\install.ps1                    # Install to ~/.taco
@@ -17,7 +17,7 @@ param(
 # When piped, $MyInvocation.MyCommand.Path is empty — no local repo files exist.
 # Download the latest release archive and re-invoke from the extracted dir.
 if (-not $MyInvocation.MyCommand.Path) {
-    $Repo = "bulga138/token-accumulator-counter-opencode"
+    $Repo = "bulga138/taco"
     $ApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
 
     try {
@@ -164,7 +164,7 @@ $Arch = Get-Architecture
 function Download-Binary {
     param($Version, $InstallDir)
     
-    $Repo = "bulga138/token-accumulator-counter-opencode"
+    $Repo = "bulga138/taco"
     $BinaryName = "taco-${Version}-${OS}-${Arch}.exe"
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Version/$BinaryName"
     $ChecksumUrl = "https://github.com/$Repo/releases/download/$Version/${BinaryName}.sha256"

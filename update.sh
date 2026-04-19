@@ -1,7 +1,7 @@
 #!/bin/bash
 # =============================================================================
 # update.sh — Update taco to the latest version
-# https://github.com/bulga138/token-accumulator-counter-opencode
+# https://github.com/bulga138/taco
 #
 # This script fetches the latest release from GitHub and updates the
 # local installation.
@@ -14,7 +14,7 @@
 
 set -euo pipefail
 
-REPO="bulga138/token-accumulator-counter-opencode"
+REPO="bulga138/taco"
 GITHUB_API="https://api.github.com/repos/${REPO}/releases/latest"
 GITHUB_DOWNLOAD="https://github.com/${REPO}/releases/latest/download"
 

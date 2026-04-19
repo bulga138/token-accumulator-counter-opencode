@@ -17,8 +17,8 @@ Thanks for your interest in contributing! This document will help you get starte
 1. **Fork and clone:**
 
    ```bash
-   git clone https://github.com/YOUR_USERNAME/token-accumulator-counter-opencode.git
-   cd token-accumulator-counter-opencode
+   git clone https://github.com/bulga138/taco.git
+   cd taco
    ```
 
 2. **Install dependencies:**

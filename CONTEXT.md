@@ -117,7 +117,7 @@ config.gateway.endpoint (e.g. https://custom-gateway.com/user/info)
 ## Project Structure
 
 ```
-token-accumulator-counter-opencode/
+taco/
 ├── bin/taco.ts                  # CLI entry point
 ├── src/
 │   ├── aggregator/              # Data computation (streaming + aggregations)

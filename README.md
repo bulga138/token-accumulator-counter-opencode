@@ -17,7 +17,7 @@ Tracks token usage and costs from your OpenCode sessions and shows charts in you
 ### Standalone binary
 
 Download a pre-compiled binary for your platform from the
-[releases page](https://github.com/bulga138/token-accumulator-counter-opencode/releases/latest).
+[releases page](https://github.com/bulga138/taco/releases/latest).
 No runtime required.
 
 **Available platforms:**
@@ -48,20 +48,20 @@ The install script automatically detects your platform and architecture, then do
 
 ```bash
 # Default: Try binary first, fallback to source
-curl -fsSL https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/bulga138/taco/master/install.sh | bash
 
 # Force source build (if you prefer)
-curl -fsSL https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/master/install.sh | bash -s -- --prefer-source
+curl -fsSL https://raw.githubusercontent.com/bulga138/taco/master/install.sh | bash -s -- --prefer-source
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
 # Default: Try binary first, fallback to source
-irm https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/master/install.ps1 | iex
+irm https://raw.githubusercontent.com/bulga138/taco/master/install.ps1 | iex
 
 # Force source build (if you prefer)
-irm https://raw.githubusercontent.com/bulga138/token-accumulator-counter-opencode/master/install.ps1 | iex -PreferSource
+irm https://raw.githubusercontent.com/bulga138/taco/master/install.ps1 | iex -PreferSource
 ```
 
 **Install options:**
@@ -79,8 +79,8 @@ TACO works with any of these package managers:
 **pnpm (recommended):**
 
 ```bash
-git clone https://github.com/bulga138/token-accumulator-counter-opencode.git
-cd token-accumulator-counter-opencode
+git clone https://github.com/bulga138/taco.git
+cd taco
 pnpm install
 pnpm run build
 ./dist/bin/taco.js
@@ -89,8 +89,8 @@ pnpm run build
 **npm:**
 
 ```bash
-git clone https://github.com/bulga138/token-accumulator-counter-opencode.git
-cd token-accumulator-counter-opencode
+git clone https://github.com/bulga138/taco.git
+cd taco
 npm install
 npm run build
 ./dist/bin/taco.js
@@ -99,8 +99,8 @@ npm run build
 **yarn:**
 
 ```bash
-git clone https://github.com/bulga138/token-accumulator-counter-opencode.git
-cd token-accumulator-counter-opencode
+git clone https://github.com/bulga138/taco.git
+cd taco
 yarn install
 yarn build
 ./dist/bin/taco.js
@@ -109,8 +109,8 @@ yarn build
 **Bun (fastest):**
 
 ```bash
-git clone https://github.com/bulga138/token-accumulator-counter-opencode.git
-cd token-accumulator-counter-opencode
+git clone https://github.com/bulga138/taco.git
+cd taco
 bun install
 bun run build
 ./dist/bin/taco.js
@@ -242,7 +242,7 @@ TypeScript. Dependencies:
 ## Project layout
 
 ```
-token-accumulator-counter-opencode/
+taco/
 ├── bin/taco.ts         # Entry point
 ├── src/
 │   ├── cli/            # Commands
