@@ -172,7 +172,8 @@ esac
 
 # Download release archive (tar.gz format, same as install.sh)
 TAG="v${LATEST_VERSION}"
-DOWNLOAD_URL="${GITHUB_DOWNLOAD}/${TAG}/taco-release-${TAG}.tar.gz"
+VERSION="${TAG#v}"
+DOWNLOAD_URL="${GITHUB_DOWNLOAD}/${TAG}/taco-release-${VERSION}.tar.gz"
 info "Downloading from: $DOWNLOAD_URL"
 
 if ! curl -fsSL -H "User-Agent: Mozilla/5.0" -o "$TEMP_DIR/taco.tar.gz" "$DOWNLOAD_URL" 2>/dev/null; then

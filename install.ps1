@@ -52,7 +52,8 @@ if (-not $MyInvocation.MyCommand.Path) {
         Write-Host "Latest release: $LatestTag"
     }
 
-    $ArchiveUrl = "https://github.com/$Repo/releases/download/$LatestTag/taco-release-$LatestTag.tar.gz"
+    $Version = $LatestTag -replace '^v', ''
+    $ArchiveUrl = "https://github.com/$Repo/releases/download/$LatestTag/taco-release-$Version.tar.gz"
     $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) "taco-install-$(Get-Random)"
     New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 

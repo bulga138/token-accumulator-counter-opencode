@@ -62,7 +62,8 @@ if [[ -z "${BASH_SOURCE[0]:-}" ]] || [[ "${BASH_SOURCE[0]}" == "bash" ]]; then
     echo "Latest release: ${LATEST_TAG}"
   fi
 
-  ARCHIVE_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/taco-release-${LATEST_TAG}.tar.gz"
+  VERSION="${LATEST_TAG#v}"
+  ARCHIVE_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/taco-release-${VERSION}.tar.gz"
   TEMP_DIR=$(mktemp -d)
   trap 'rm -rf "$TEMP_DIR"' EXIT
 
