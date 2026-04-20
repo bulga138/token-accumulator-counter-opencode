@@ -13,7 +13,7 @@ env:
 
 jobs:
   test:
-    name: Test (pnpm + Node 20)
+    name: Test (pnpm + Node 22)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -24,10 +24,10 @@ jobs:
           version: 9
           run_install: false
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.x
         uses: actions/setup-node@v6.3.0
         with:
-          node-version: '20.x'
+          node-version: '22.x'
           cache: 'pnpm'
 
       - name: Install dependencies

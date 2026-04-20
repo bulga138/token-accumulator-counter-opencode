@@ -27,12 +27,12 @@ jobs:
             os_name: windows
             arch: x64
             ext: '.exe'
-          - os: macos-13
+          - os: macos-latest
             target: macos-x64
             os_name: macos
             arch: x64
             ext: ''
-          - os: macos-14
+          - os: macos-latest
             target: macos-arm64
             os_name: macos
             arch: arm64
@@ -49,7 +49,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6.3.0
         with:
-          node-version: '20.x'
+          node-version: '22.x'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -125,7 +125,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6.3.0
         with:
-          node-version: '20.x'
+          node-version: '22.x'
           cache: 'pnpm'
 
       - name: Install dependencies

@@ -80,7 +80,7 @@ The `!` prefix runs commands locally without sending data to the AI.
 - Database: Multi-driver support (Bun > better-sqlite3 > sql.js)
 - Output: Terminal charts via asciichart + chalk
 - Memory: Streaming queries, SQLite aggregations, query limits
-- Dependencies: Fixed versions (see package.json), Node.js 20+
+- Dependencies: Fixed versions (see package.json), Node.js 22+
 
 **Key Memory Optimizations:**
 
@@ -191,7 +191,7 @@ When modifying these files, also update:
 
 **Hard Constraints:**
 
-- Node.js 20+ only (no older versions)
+- Node.js 22+ only (no older versions)
 - Dependencies are pinned to fixed versions (see package.json)
 - Must handle 32GB+ datasets without memory overflow
 - Gateway fetch failures must not crash the CLI (graceful degradation)
@@ -398,7 +398,7 @@ Normalization steps: strip provider prefix → strip version suffix → replace 
 
 ## Technical Stack
 
-- **Runtime:** Node.js 20+ or Bun
+- **Runtime:** Node.js 22+ or Bun
 - **Database:** sql.js (WASM), better-sqlite3 (optional), bun:sqlite (Bun)
 - **CLI:** Commander.js
 - **Colors:** Chalk
@@ -459,7 +459,7 @@ Bun users skip the `npm install` step — Bun resolves deps natively.
 
 ## CI/CD
 
-- **Test Matrix:** Ubuntu, Windows, macOS × Node.js 18, 20, 22
+- **Test Matrix:** Ubuntu, Windows, macOS × Node.js 22, 24
 - **Build:** Cross-platform executables (Linux x64, Windows x64, macOS x64/ARM64)
 - **Release:** GitHub releases with binaries and source archive
 - **Publish:** npm registry
