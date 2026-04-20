@@ -66,6 +66,24 @@ jobs:
       - name: Create standalone executable
         run: |
           bun run bundle
+          if [ ! -f taco ] && [ ! -f taco.exe ]; then
+            echo "ERROR: Binary 'taco' or 'taco.exe' not created after bun run bundle"
+            exit 1
+          fi
+        shell: bash
+
+      - name: Verify binary creation
+        run: |
+          echo "=== Checking for binary ==="
+          ls -la taco* || echo "No taco files found"
+          if [ -f taco ] || [ -f taco.exe ]; then
+            echo "Binary created successfully"
+            file taco 2>/dev/null || file taco.exe 2>/dev/null || echo "File command not available"
+            ls -lh taco* 2>/dev/null || echo "ls command failed"
+          else
+            echo "ERROR: Binary not found"
+            exit 1
+          fi
         shell: bash
 
       - name: Make executable (Unix)
@@ -105,8 +123,9 @@ jobs:
         with:
           name: ${{ matrix.target }}
           path: |
-            taco-v*-*
-            taco-*.sha256
+            taco*
+            *.sha256
+          if-no-files-found: error
 
   create-source-archive:
     name: Create Source Archive
@@ -194,10 +213,9 @@ jobs:
         with:
           body: ${{ needs.generate-changelog.outputs.changelog }}
           files: |
+            artifacts/taco-*
+            artifacts/*.sha256
             artifacts/**/*.tar.gz
-            artifacts/**/*.zip
-            artifacts/**/*.exe
-            artifacts/**/*.sha256
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
