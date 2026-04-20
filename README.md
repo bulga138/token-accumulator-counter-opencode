@@ -10,7 +10,7 @@ Tracks token usage and costs from your OpenCode sessions and shows charts in you
 - macOS 12+ (Intel and Apple Silicon)
 - Linux (Ubuntu 20.04+, most distros)
 
-[Bun](https://bun.sh) gives the best performance (10x faster database queries). Node.js 18+ works too, with automatic fallback to a pure WASM SQLite driver if needed.
+[Bun](https://bun.sh) gives the best performance (10x faster database queries). Node.js 22+ works too, with automatic fallback to a pure WASM SQLite driver if needed.
 
 ## Installation
 

@@ -4,7 +4,7 @@ Thanks for your interest in contributing! This document will help you get starte
 
 ## Prerequisites
 
-- **Node.js** 20+ (required)
+- **Node.js** 22+ (required)
 - **Package manager** — any of these work:
   - **pnpm** (recommended - `npm install -g pnpm`)
   - **npm** (comes with Node.js)
