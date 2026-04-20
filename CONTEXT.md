@@ -2,8 +2,7 @@
 
 **Token Accumulator Counter for OpenCode** 🌮
 
-**Version:** 0.1.3
-**Last Updated:** April 17, 2026
+**Last Updated:** April 20, 2026
 
 ---
 

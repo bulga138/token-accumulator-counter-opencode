@@ -1,0 +1,93 @@
+name: Version Bump
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [master]
+
+jobs:
+  version-bump:
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'RELEASE')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5.0.0
+        with:
+          version: 9
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6.3.0
+        with:
+          node-version: '20.x'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Determine bump type
+        id: bump
+        run: |
+          BUMP_TYPE="patch"
+          PR_LABELS="${{ toJson(github.event.pull_request.labels.*.name) }}"
+
+          if [[ $PR_LABELS == *"MAJOR"* ]]; then
+            BUMP_TYPE="major"
+          elif [[ $PR_LABELS == *"MINOR"* ]]; then
+            BUMP_TYPE="minor"
+          fi
+
+          echo "BUMP_TYPE=$BUMP_TYPE" >> $GITHUB_OUTPUT
+          echo "Bumping: $BUMP_TYPE"
+
+      - name: Bump version
+        env:
+          BUMP_TYPE: ${{ steps.bump.outputs.BUMP_TYPE }}
+        run: |
+          chmod +x scripts/bump-version.sh
+          ./scripts/bump-version.sh
+
+      - name: Get new version
+        id: version
+        run: |
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "New version: $NEW_VERSION"
+
+      - name: Commit version bump
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add package.json
+          git commit -m "chore: bump version to v${{ steps.version.outputs.NEW_VERSION }}"
+          git push origin master
+
+      - name: Create tag
+        run: |
+          git tag -a "v${{ steps.version.outputs.NEW_VERSION }}" -m "Release v${{ steps.version.outputs.NEW_VERSION }}"
+          git push origin "v${{ steps.version.outputs.NEW_VERSION }}"
+
+      - name: Remove labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = ['RELEASE', 'MAJOR', 'MINOR', 'PATCH'];
+            for (const label of labels) {
+              try {
+                await github.rest.issues.removeLabel({
+                  issue_number: context.issue.number,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label
+                });
+              } catch (error) {
+                console.log(`Label ${label} not found or already removed.`);
+              }
+            }

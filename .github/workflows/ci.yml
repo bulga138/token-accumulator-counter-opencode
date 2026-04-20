@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
+jobs:
+  test:
+    name: Test (pnpm + Node 20)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5.0.0
+        with:
+          version: 9
+          run_install: false
+
+      - name: Setup Node.js 20.x
+        uses: actions/setup-node@v6.3.0
+        with:
+          node-version: '20.x'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run type check
+        run: pnpm run typecheck
+
+      - name: Run tests
+        run: pnpm test
+
+  test-bun:
+    name: Test (Bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Run tests
+        run: bun test
+
+  test-package-managers:
+    name: Test ${{ matrix.package-manager }} + Node ${{ matrix.node-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: [20, 22, 24]
+        package-manager: [npm, pnpm, yarn]
+        exclude:
+          - os: windows-latest
+            package-manager: yarn
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v6.3.0
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Setup ${{ matrix.package-manager }}
+        run: |
+          case "${{ matrix.package-manager }}" in
+            npm)
+              npm --version
+              ;;
+            pnpm)
+              npm install -g pnpm@9
+              pnpm --version
+              ;;
+            yarn)
+              npm install -g yarn@1
+              yarn --version
+              ;;
+          esac
+        shell: bash
+
+      - name: Install dependencies
+        run: |
+          case "${{ matrix.package-manager }}" in
+            npm)
+              npm install --package-lock-only --ignore-scripts
+              npm ci
+              ;;
+            pnpm)
+              pnpm install --frozen-lockfile
+              ;;
+            yarn)
+              yarn install --no-immutable 2>/dev/null || yarn install
+              ;;
+          esac
+        shell: bash
+
+      - name: Run type check
+        run: |
+          case "${{ matrix.package-manager }}" in
+            npm) npm run typecheck ;;
+            pnpm) pnpm run typecheck ;;
+            yarn) yarn typecheck ;;
+          esac
+        shell: bash
+
+      - name: Run tests
+        run: |
+          case "${{ matrix.package-manager }}" in
+            npm) npm test ;;
+            pnpm) pnpm test ;;
+            yarn) yarn test ;;
+          esac
+        shell: bash

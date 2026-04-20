@@ -1,74 +1,16 @@
-name: CI/CD
+name: Release
 
 on:
   push:
-    branches: [master]
     tags: ['v*']
-  pull_request:
-    branches: [master]
-  release:
-    types: [published]
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version tag to release (e.g., v0.1.2)'
-        required: true
-        type: string
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
-  # Quick smoke test - pnpm on Ubuntu (primary package manager)
-  test:
-    name: Test (pnpm + Node 20)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5.0.0
-        with:
-          version: 9
-          run_install: false
-
-      - name: Setup Node.js 20.x
-        uses: actions/setup-node@v6.3.0
-        with:
-          node-version: '20.x'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run type check
-        run: pnpm run typecheck
-
-      - name: Run tests
-        run: pnpm test
-
-  # Bun test (different runtime, worth keeping)
-  test-bun:
-    name: Test (Bun)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Install dependencies
-        run: bun install
-
-      - name: Run tests
-        run: bun test
-
-  # Build and release binaries for all platforms
-  build-and-release:
+  build:
     name: Build ${{ matrix.target }}
-    needs: [test, test-bun]
     runs-on: ${{ matrix.os }}
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     strategy:
@@ -109,7 +51,6 @@ jobs:
         with:
           node-version: '20.x'
           cache: 'pnpm'
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -143,54 +84,33 @@ jobs:
 
       - name: Rename executable
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION=${GITHUB_REF#refs/tags/}
-          fi
+          VERSION=${GITHUB_REF_NAME#v}
           mv taco "taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.ext }}"
         shell: bash
 
-      - name: Upload executable to release
-        uses: softprops/action-gh-release@v3.0.0
-        with:
-          files: taco-v*-*
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Generate checksum
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION=${GITHUB_REF#refs/tags/}
-          fi
+          VERSION=${GITHUB_REF_NAME#v}
           BINARY="taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.ext }}"
           CHECKSUM_FILE="taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}.sha256"
-          # sha256sum is Linux-only; macOS uses shasum -a 256
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$BINARY" > "$CHECKSUM_FILE"
           else
             shasum -a 256 "$BINARY" > "$CHECKSUM_FILE"
           fi
-          cat "$CHECKSUM_FILE"
         shell: bash
 
-      - name: Upload checksum
-        uses: softprops/action-gh-release@v3.0.0
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         with:
-          files: taco-*.sha256
-          generate_release_notes: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: ${{ matrix.target }}
+          path: |
+            taco-v*-*
+            taco-*.sha256
 
-  # Create source archive for install scripts
   create-source-archive:
     name: Create Source Archive
-    needs: [test, test-bun]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     steps:
@@ -216,11 +136,7 @@ jobs:
 
       - name: Create source archive
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION=${GITHUB_REF#refs/tags/}
-          fi
+          VERSION=${GITHUB_REF_NAME#v}
           tar -czf "taco-release-${VERSION}.tar.gz" \
             dist/ \
             bin/ \
@@ -234,9 +150,54 @@ jobs:
             LICENSE 2>/dev/null || true
 
       - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-archive
+          path: taco-release-*.tar.gz
+
+  generate-changelog:
+    name: Generate Changelog
+    runs-on: ubuntu-latest
+    outputs:
+      changelog: ${{ steps.changelog.outputs.content }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          chmod +x scripts/generate-changelog.sh
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          CHANGELOG=$(./scripts/generate-changelog.sh "$PREV_TAG")
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+  create-release:
+    name: Create GitHub Release
+    needs: [build, create-source-archive, generate-changelog]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v3.0.0
         with:
-          files: taco-release-*.tar.gz
-          generate_release_notes: true
+          body: ${{ needs.generate-changelog.outputs.changelog }}
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+            artifacts/**/*.exe
+            artifacts/**/*.sha256
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

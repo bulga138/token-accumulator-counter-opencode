@@ -1,0 +1,33 @@
+pre-commit:
+  parallel: true
+  commands:
+    format:
+      run: pnpm run format
+      stage_fixed: true
+      glob: '*.{ts,js,json,md,yml,yaml}'
+      exclude:
+        - dist/**
+        - node_modules/**
+
+pre-push:
+  parallel: true
+  commands:
+    typecheck:
+      run: pnpm run typecheck
+      glob: '*.ts'
+      exclude:
+        - dist/**
+        - node_modules/**
+    lint:
+      run: pnpm run lint
+      glob: '*.{ts,js}'
+      exclude:
+        - dist/**
+        - node_modules/**
+    test:
+      run: pnpm test
+
+commit-msg:
+  commands:
+    conventional-commits:
+      run: npx commitlint --edit {1}

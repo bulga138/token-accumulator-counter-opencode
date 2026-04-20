@@ -92,6 +92,96 @@ pnpm run format        # Format all files
 pnpm run format:check  # Check formatting without fixing
 ```
 
+## Git Hooks and Code Quality
+
+We use **lefthook** to enforce code quality and commit message standards.
+
+### Pre-commit Hooks
+
+- **Format check**: Ensures code is properly formatted with Prettier
+- **Auto-format**: Automatically fixes formatting issues
+
+### Pre-push Hooks
+
+- **Type check**: Ensures TypeScript types are correct
+- **Lint**: Ensures code follows ESLint rules
+- **Tests**: Runs all tests before pushing
+
+### Commit Message Hooks
+
+- **Conventional commits**: Enforces commit message format
+  - `feat:` - New feature
+  - `fix:` - Bug fix
+  - `docs:` - Documentation
+  - `refactor:` - Code restructuring
+  - `test:` - Tests
+  - `chore:` - Maintenance
+
+### Installing Git Hooks
+
+After cloning the repository:
+
+```bash
+pnpm install
+lefthook install
+```
+
+## Release Process
+
+We use automated version management with PR labels.
+
+### Creating a Release
+
+1. Create a PR with your changes
+2. Add the `RELEASE` label to the PR
+3. Add one of these labels to specify the version bump:
+   - `MAJOR` - Breaking changes (1.0.0 → 2.0.0)
+   - `MINOR` - New features (1.0.0 → 1.1.0)
+   - `PATCH` - Bug fixes (1.0.0 → 1.0.1) - default if none specified
+4. Merge the PR to master
+5. GitHub Actions will:
+   - Bump the version in package.json
+   - Create a git tag
+   - Build cross-platform binaries
+   - Generate a changelog from commits
+   - Create a GitHub release
+
+### Example
+
+```bash
+# Create PR with labels: RELEASE, MINOR
+# Merge to master
+# → Version bumps from 0.1.4 to 0.1.5
+# → Tag v0.1.5 created
+# → Release created with auto-generated changelog
+```
+
+### Commit Message Format
+
+Follow conventional commits format:
+
+```
+type(scope): description
+
+[optional body]
+
+[optional footer]
+```
+
+Types:
+
+- `feat:` - New feature (triggers MINOR bump)
+- `fix:` - Bug fix (triggers PATCH bump)
+- `docs:` - Documentation only
+- `refactor:` - Code restructuring
+- `test:` - Tests
+- `chore:` - Maintenance
+
+Breaking changes:
+
+- Add `!` after type: `feat!: breaking change`
+- Or add `BREAKING CHANGE:` in footer
+
 ## Project Structure
 
 ```
@@ -195,32 +285,44 @@ Then open a Pull Request on GitHub.
 
 ## CI/CD Workflows
 
-We have two GitHub Actions workflows:
+We have three GitHub Actions workflows:
 
-### Main CI/CD (`.github/workflows/ci-cd.yml`)
+### CI (`.github/workflows/ci.yml`)
 
-**Runs on:** Every push/PR to master, releases
+**Runs on:**
+
+- Every push to master
+- Every PR opened/updated to master
+- Manual workflow_dispatch
 
 **Jobs:**
 
-- Quick smoke test (pnpm + Node 20 on Ubuntu)
-- Bun test (different runtime)
-- Build binaries for 4 platforms (linux-x64, windows-x64, macos-x64, macos-arm64)
-- Generate SHA256 checksums
+- Test (pnpm + Node 20 on Ubuntu)
+- Test (Bun)
+- Package manager compatibility (npm, pnpm, yarn across Node 20, 22, 24)
+
+### Version Bump (`.github/workflows/version-bump.yml`)
+
+**Runs on:** PR merged to master with `RELEASE` label
+
+**Jobs:**
+
+- Detect bump type from labels (MAJOR/MINOR/PATCH)
+- Bump version in package.json
+- Commit and push version bump
+- Create git tag
+- Remove labels from PR
+
+### Release (`.github/workflows/release.yml`)
+
+**Runs on:** Git tags matching `v*`
+
+**Jobs:**
+
+- Build cross-platform binaries (linux-x64, windows-x64, macos-x64, macos-arm64)
 - Create source archive
-
-### Package Manager CI (`.github/workflows/ci-package-managers.yml`)
-
-**Runs on:** When package.json or lockfiles change, manual trigger
-
-**Tests:**
-
-- npm, pnpm, yarn across Node 20, 22, 24
-- Ubuntu, Windows, macOS
-- Edge Node versions (23, 25)
-- Install script validation
-
-**Note:** The comprehensive package manager testing is in a separate workflow to keep the main CI/CD fast while ensuring all package managers work correctly.
+- Generate changelog from commits
+- Create GitHub release with binaries and changelog
 
 ## Code Style
 

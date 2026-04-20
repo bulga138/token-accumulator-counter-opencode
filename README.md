@@ -258,6 +258,31 @@ taco/
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, testing, code style, and PR guidelines.
 
+### Git Hooks
+
+We use lefthook to enforce code quality:
+
+```bash
+# Install git hooks
+lefthook install
+```
+
+Pre-commit: Format check
+Pre-push: Type check, lint, tests
+Commit-msg: Conventional commits format
+
+### Release Process
+
+Releases are automated using PR labels:
+
+1. Create PR with changes
+2. Add `RELEASE` label
+3. Add `MAJOR`/`MINOR`/`PATCH` label (default: PATCH)
+4. Merge to master
+5. GitHub Actions creates release automatically
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
 ## Updating
 
 ```bash

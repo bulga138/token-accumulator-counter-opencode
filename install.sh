@@ -20,7 +20,7 @@ REPO="bulga138/taco"
 # Download the requested (or latest) release archive and re-exec from the extracted dir.
 #
 # Install specific version:
-#   curl -sSL https://raw.githubusercontent.com/bulga138/taco/master/install.sh | bash -s -- --version v0.1.3
+#   curl -sSL https://raw.githubusercontent.com/bulga138/taco/master/install.sh | bash -s -- --version v0.1.4
 # Install latest:
 #   curl -sSL https://raw.githubusercontent.com/bulga138/taco/master/install.sh | bash
 if [[ -z "${BASH_SOURCE[0]:-}" ]] || [[ "${BASH_SOURCE[0]}" == "bash" ]]; then

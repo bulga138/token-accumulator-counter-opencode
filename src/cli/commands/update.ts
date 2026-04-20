@@ -18,11 +18,10 @@ const REPO_URL = `https://github.com/${REPO}`
  */
 function fetchLatestTag(): string | null {
   try {
-    const result = spawnSync(
-      'git',
-      ['ls-remote', '--tags', `${REPO_URL}.git`],
-      { encoding: 'utf8', timeout: 15_000 }
-    )
+    const result = spawnSync('git', ['ls-remote', '--tags', `${REPO_URL}.git`], {
+      encoding: 'utf8',
+      timeout: 15_000,
+    })
     if (result.status !== 0 || !result.stdout) return null
 
     const tags = result.stdout
@@ -128,7 +127,7 @@ async function runUpdate(currentVersion: string, opts: UpdateOptions): Promise<v
     if (!latest) {
       err(
         'Could not determine latest release. Check your internet connection or pin a version:\n' +
-          '  taco update --version v0.1.4'
+          '  taco update --version v0.1.5'
       )
       process.exit(1)
     }
@@ -153,9 +152,7 @@ async function runUpdate(currentVersion: string, opts: UpdateOptions): Promise<v
   if (opts.check) {
     if (order === 'older') {
       console.log()
-      console.log(
-        chalk.yellow(`  Update available: v${currentVersion} → ${targetTag}`)
-      )
+      console.log(chalk.yellow(`  Update available: v${currentVersion} → ${targetTag}`))
       console.log(chalk.dim('  Run `taco update` to install.'))
     } else {
       ok(`v${currentVersion} is up to date.`)
@@ -213,7 +210,7 @@ export function registerUpdateCommand(program: Command): void {
     .command('update')
     .description('Update TACO to the latest (or a specific) version')
     .option('--check', 'Check for updates without installing')
-    .option('--version <tag>', 'Update to a specific version (e.g. v0.1.3)')
+    .option('--version <tag>', 'Update to a specific version (e.g. v0.1.4)')
     .option('--force', 'Force update even if already on the target version')
 
   cmd.action(async (opts: UpdateOptions) => {

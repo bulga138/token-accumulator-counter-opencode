@@ -50,7 +50,7 @@ for arg in "$@"; do
       echo "Options:"
       echo "  --check, -c          Check for updates only (don't install)"
       echo "  --force, -f          Force update even if same version"
-      echo "  --version <tag>      Update to a specific version (e.g. v0.1.3)"
+      echo "  --version <tag>      Update to a specific version (e.g. v0.1.4)"
       echo "  --help, -h           Show this help"
       exit 0
       ;;

@@ -18,7 +18,7 @@ param(
 # Download the requested (or latest) release archive and re-invoke from the extracted dir.
 #
 # Install specific version (set env var before piping):
-#   $env:TACO_VERSION="v0.1.3"; irm https://raw.githubusercontent.com/bulga138/taco/master/install.ps1 | iex
+#   $env:TACO_VERSION="v0.1.4"; irm https://raw.githubusercontent.com/bulga138/taco/master/install.ps1 | iex
 # Install latest:
 #   irm https://raw.githubusercontent.com/bulga138/taco/master/install.ps1 | iex
 if (-not $MyInvocation.MyCommand.Path) {
