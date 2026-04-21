@@ -48,6 +48,9 @@ jobs:
         with:
           bun-version: 1.1.38
 
+      - name: Install dependencies
+        run: bun install
+
       - name: Create standalone executable
         run: |
           bun build ./bin/taco.ts --outfile ./taco ${{ matrix.bun_target }} --compile
