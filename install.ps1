@@ -181,6 +181,7 @@ function Get-Architecture {
 
 $OS = "windows"
 $Arch = Get-Architecture
+$Ext = ".exe"
 
 # --- Try to download pre-built binary ---
 function Download-Binary {
@@ -189,10 +190,9 @@ function Download-Binary {
     $Repo = "bulga138/taco"
     
     $VersionNoV = $Version -replace '^v', ''
-    $BinaryName = "taco-${VersionNoV}-${OS}-${Arch}.exe"
+    $BinaryName = "taco-$VersionNoV-$OS-$Arch$Ext"
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Version/$BinaryName"
-    $ChecksumUrl = "https://github.com/$Repo/releases/download/$Version/${BinaryName}.sha256"
-    
+    $ChecksumUrl = "https://github.com/$Repo/releases/download/$Version/$BinaryName.sha256"
     Info "Checking for pre-built binary: $BinaryName..."
     
     try {
