@@ -6,6 +6,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { pipeline } from 'stream/promises'
 import { getColors } from '../../theme/index.js'
+import { getVersion } from '../index.js'
 
 const REPO = 'bulga138/taco'
 const REPO_URL = `https://github.com/${REPO}`
@@ -214,30 +215,8 @@ export function registerUpdateCommand(program: Command): void {
     .option('--force', 'Force update even if already on the target version')
 
   cmd.action(async (opts: UpdateOptions) => {
-    // Read current version from package.json (already loaded in index.ts, but
-    // we import directly here to keep this module self-contained)
-    let currentVersion = '0.0.0'
-    try {
-      const { readFileSync } = await import('fs')
-      const { fileURLToPath } = await import('url')
-      const { dirname, join: pathJoin } = await import('path')
-
-      const modFile = fileURLToPath(import.meta.url)
-      let dir = dirname(modFile)
-      for (let i = 0; i < 5; i++) {
-        const candidate = pathJoin(dir, 'package.json')
-        if (existsSync(candidate)) {
-          const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as { version?: string }
-          currentVersion = pkg.version ?? currentVersion
-          break
-        }
-        const parent = dirname(dir)
-        if (parent === dir) break
-        dir = parent
-      }
-    } catch {
-      // fall through with default
-    }
+    // Get current version from embedded VERSION or package.json
+    const currentVersion = getVersion()
 
     console.log()
     console.log(chalk.bold('🌮 TACO — Update'))

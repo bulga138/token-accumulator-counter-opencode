@@ -389,15 +389,15 @@ mkdir -p "$INSTALL_DIR"
 
 # If we have a standalone binary, we're done
 if [[ "$BINARY_INSTALLED" == "true" ]]; then
-  info "Pre-built binary installed, setting up runtime..."
+  info "Pre-built binary installed successfully"
   
-  # Copy minimal files needed for the binary to work
-  cp "$REPO_DIR/package.json" "$INSTALL_DIR/" 2>/dev/null || true
-  cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/" 2>/dev/null || true
-  
-  # Install runtime dependencies non-interactively
-  if command -v npm &>/dev/null; then
-    (cd "$INSTALL_DIR" && npm install --omit=dev --silent --no-audit --no-fund) 2>/dev/null || true
+  # Copy uninstall script for binary installation
+  if [[ -f "$REPO_DIR/uninstall.sh" ]]; then
+    cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/"
+    chmod +x "$INSTALL_DIR/uninstall.sh"
+  fi
+  if [[ -f "$REPO_DIR/uninstall.ps1" ]]; then
+    cp "$REPO_DIR/uninstall.ps1" "$INSTALL_DIR/"
   fi
   
   if [[ "$OS" == "windows" ]]; then

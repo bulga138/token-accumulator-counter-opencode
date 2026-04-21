@@ -1,0 +1,42 @@
+name: Release Test
+
+on:
+  pull_request:
+    branches: [master]
+    paths:
+      - '.github/workflows/release.yml'
+      - 'bin/**'
+      - 'src/**'
+      - 'package.json'
+      - 'tsconfig.json'
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    name: Build Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.1.38
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build executable
+        run: |
+          VERSION="0.0.1-test"
+          bun build ./bin/taco.ts \
+            --outfile ./taco \
+            --compile \
+            --minify \
+            --bytecode
+
+      - name: Verify executable
+        run: |
+          test -f taco || test -f taco.exe
+          ./taco --version
+          ./taco --help | head -5

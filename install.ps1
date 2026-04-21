@@ -352,24 +352,14 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
 # If we have a standalone binary, we're done
 if ($BinaryInstalled) {
-    Info "Pre-built binary installed, setting up runtime..."
+    Info "Pre-built binary installed successfully"
     
-    # Copy minimal files needed for the binary to work
-    Copy-Item -Path "$ScriptDir\package.json" -Destination $InstallDir -Force -ErrorAction SilentlyContinue
-    Copy-Item -Path "$ScriptDir\uninstall.ps1" -Destination $InstallDir -Force -ErrorAction SilentlyContinue
-    Copy-Item -Path "$ScriptDir\uninstall.sh" -Destination $InstallDir -Force -ErrorAction SilentlyContinue
-    
-    # Install runtime dependencies non-interactively
-    $NpmCmd = Get-Command npm -ErrorAction SilentlyContinue
-    if ($NpmCmd) {
-        Push-Location $InstallDir
-        try {
-            $null = npm install --omit=dev --silent --no-audit --no-fund 2>&1
-        } catch {
-            # Non-fatal
-        } finally {
-            Pop-Location
-        }
+    # Copy uninstall scripts for binary installation
+    if (Test-Path "$ScriptDir\uninstall.ps1") {
+        Copy-Item -Path "$ScriptDir\uninstall.ps1" -Destination $InstallDir -Force
+    }
+    if (Test-Path "$ScriptDir\uninstall.sh") {
+        Copy-Item -Path "$ScriptDir\uninstall.sh" -Destination $InstallDir -Force
     }
     
     Success "Installed to $InstallDir\taco.exe"

@@ -18,6 +18,9 @@ import { existsSync, readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 
+// Build-time constants injected by bun build --define
+declare const VERSION: string | undefined
+
 /**
  * Walk up from a starting directory until package.json is found.
  * Returns the path to package.json or null if not found within maxDepth levels.
@@ -62,13 +65,26 @@ function findPackageJson(): string {
     const found = findPackageJsonFrom(start)
     if (found) return found
   }
-
-  throw new Error(
-    'Could not locate package.json. Please reinstall TACO: https://github.com/bulga138/taco'
-  )
+  return ''
 }
 
-const packageJson = JSON.parse(readFileSync(findPackageJson(), 'utf-8'))
+// Try to load package.json, fallback to embedded VERSION for compiled binaries
+let packageJson: { version: string } | null = null
+const pkgPath = findPackageJson()
+if (pkgPath && existsSync(pkgPath)) {
+  try {
+    packageJson = JSON.parse(readFileSync(pkgPath, 'utf-8'))
+  } catch {
+    // ignore
+  }
+}
+
+export function getVersion(): string {
+  // Priority: embedded VERSION > package.json > fallback
+  if (typeof VERSION === 'string' && VERSION) return VERSION
+  if (packageJson?.version) return packageJson.version
+  return 'unknown'
+}
 
 // ── Braille art embedded as a constant
 /* prettier-ignore */
@@ -125,7 +141,7 @@ export function createProgram(): Command {
 
   // Custom --version that shows art then version string
   program.version(
-    `\n${TACO_ART}\n\n🌮 TACO v${packageJson.version} — Token Accumulator Counter for OpenCode`,
+    `\n${TACO_ART}\n\n🌮 TACO v${getVersion()} — Token Accumulator Counter for OpenCode`,
     '-V, --version',
     'Display version number'
   )

@@ -4,191 +4,91 @@ on:
   push:
     tags: ['v*']
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
 jobs:
   build:
     name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: linux-x64
+          - target: linux-x64
             os_name: linux
             arch: x64
-            ext: ''
-            bun_target: ''
-          - os: windows-latest
-            target: windows-x64
+            bun_target: bun-linux-x64
+          - target: linux-arm64
+            os_name: linux
+            arch: arm64
+            bun_target: bun-linux-arm64
+          - target: windows-x64
             os_name: windows
             arch: x64
-            ext: '.exe'
-            bun_target: ''
-          - os: macos-latest
-            target: macos-x64
+            bun_target: bun-windows-x64
+          - target: macos-x64
             os_name: macos
             arch: x64
-            ext: ''
-            bun_target: '--target bun-darwin-x64'
-          - os: macos-latest
-            target: macos-arm64
+            bun_target: bun-darwin-x64
+          - target: macos-arm64
             os_name: macos
             arch: arm64
-            ext: ''
-            bun_target: ''
+            bun_target: bun-darwin-arm64
     steps:
       - uses: actions/checkout@v6
+
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.1.38
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
-      - name: Create standalone executable
+      - name: Build executable
         run: |
-          bun build ./bin/taco.ts --outfile ./taco ${{ matrix.bun_target }} --compile
-          if [ ! -f taco ] && [ ! -f taco.exe ]; then
-            echo "ERROR: Binary 'taco' or 'taco.exe' not created after bun run bundle"
-            exit 1
-          fi
-        shell: bash
+          VERSION=${GITHUB_REF_NAME#v}
+          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          COMMIT_HASH=${GITHUB_SHA::8}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          bun build ./bin/taco.ts \
+            --outfile ./taco \
+            --target ${{ matrix.bun_target }} \
+            --compile \
+            --minify \
+            --bytecode \
+            --sourcemap \
+            --define VERSION=\"${VERSION}\" \
+            --define BUILD_TIME=\"${BUILD_TIME}\" \
+            --define COMMIT_HASH=\"${COMMIT_HASH}\"
 
-      - name: Verify binary creation
-        run: |
-          echo "=== Checking for binary ==="
-          ls -la taco* || echo "No taco files found"
-          if [ -f taco ] || [ -f taco.exe ]; then
-            echo "Binary created successfully"
-            file taco 2>/dev/null || file taco.exe 2>/dev/null || echo "File command not available"
-            ls -lh taco* 2>/dev/null || echo "ls command failed"
-          else
-            echo "ERROR: Binary 'taco' or 'taco.exe' not created"
-            exit 1
-          fi
-        shell: bash
-
-      - name: Make executable (Unix)
-        if: matrix.os != 'windows-latest'
-        run: chmod +x taco
+      - name: Make executable
+        run: chmod +x taco taco.exe 2>/dev/null || true
 
       - name: Compress with UPX
-        if: matrix.os == 'ubuntu-latest'
-        uses: crazy-max/ghaction-upx@v3
+        if: matrix.target == 'linux-x64'
+        uses: crazy-max/ghaction-upx@v4
         with:
           version: v4.2.4
-          files: |
-            ./taco
+          files: ./taco
           args: --best
         continue-on-error: true
 
-      - name: Rename executable
+      - name: Rename
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          if [ -f taco.exe ]; then
-            mv taco.exe "taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}.exe"
-          elif [ -f taco ]; then
-            mv taco "taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}"
-          else
-            echo "ERROR: Neither taco nor taco.exe exists!"
-            exit 1
-          fi
-        shell: bash
+          mv taco taco.exe 2>/dev/null || true
+          mv taco.exe taco-${{ env.VERSION }}-${{ matrix.os_name }}-${{ matrix.arch }}
 
       - name: Generate checksum
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          if [ -f "taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}.exe" ]; then
-            BINARY="taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}.exe"
-          else
-            BINARY="taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}"
-          fi
-          CHECKSUM_FILE="taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}.sha256"
-          if command -v sha256sum >/dev/null 2>&1; then
-            sha256sum "$BINARY" > "$CHECKSUM_FILE"
-          else
-            shasum -a 256 "$BINARY" > "$CHECKSUM_FILE"
-          fi
-        shell: bash
+          VERSION=${{ env.VERSION }}
+          BINARY="taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}"
+          sha256sum "$BINARY" > "$BINARY.sha256"
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v3.0.0
         with:
           files: taco-*
           generate_release_notes: ${{ matrix.target == 'linux-x64' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  create-source-archive:
-    name: Create Source Archive
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5.0.0
-        with:
-          version: 9
-          run_install: false
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6.3.0
-        with:
-          node-version: '22.x'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build
-        run: pnpm run build
-
-      - name: Verify dist output
-        run: |
-          if [ ! -d dist ] || [ -z "$(ls -A dist)" ]; then
-            echo "ERROR: dist/ is missing or empty after build"
-            exit 1
-          fi
-          echo "dist/ contains $(find dist -type f | wc -l) files"
-
-      - name: Create source archive
-        run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          tar -czf "taco-release-${VERSION}.tar.gz" \
-            dist/ \
-            bin/ \
-            install.sh \
-            install.ps1 \
-            uninstall.sh \
-            uninstall.ps1 \
-            update.sh \
-            README.md \
-            package.json \
-            LICENSE
-
-      - name: Verify archive
-        run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          ARCHIVE="taco-release-${VERSION}.tar.gz"
-          FILE_COUNT=$(tar -tzf "$ARCHIVE" | wc -l)
-          echo "Archive contains $FILE_COUNT files"
-          if [ "$FILE_COUNT" -lt 10 ]; then
-            echo "ERROR: Archive looks incomplete (only $FILE_COUNT files)"
-            exit 1
-          fi
-          ls -lh "$ARCHIVE"
-
-      - name: Upload source archive to release
-        uses: softprops/action-gh-release@v3.0.0
-        with:
-          files: taco-release-*.tar.gz
-          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
