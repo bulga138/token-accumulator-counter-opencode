@@ -17,11 +17,13 @@ export function registerAgentsCommand(program: Command): void {
     .description('Show per-agent type breakdown (build, plan, explore)')
     .alias('a')
 
-  addFilterFlags(cmd)
-    .addOption(
-      new Option('--sort <field>', 'Sort by field (default: tokens)')
-        .choices(['cost', 'tokens', 'messages'])
-    )
+  addFilterFlags(cmd).addOption(
+    new Option('--sort <field>', 'Sort by field (default: tokens)').choices([
+      'cost',
+      'tokens',
+      'messages',
+    ])
+  )
 
   cmd.action(async opts => {
     const config = getConfig()
@@ -54,9 +56,12 @@ export function registerAgentsCommand(program: Command): void {
 
 function sortAgentStats(stats: AgentStats[], sort: SortField): AgentStats[] {
   switch (sort) {
-    case 'cost': return [...stats].sort((a, b) => b.cost - a.cost)
-    case 'messages': return [...stats].sort((a, b) => b.messageCount - a.messageCount)
+    case 'cost':
+      return [...stats].sort((a, b) => b.cost - a.cost)
+    case 'messages':
+      return [...stats].sort((a, b) => b.messageCount - a.messageCount)
     case 'tokens':
-    default: return [...stats].sort((a, b) => b.tokens.total - a.tokens.total)
+    default:
+      return [...stats].sort((a, b) => b.tokens.total - a.tokens.total)
   }
 }

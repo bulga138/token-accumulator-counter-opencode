@@ -23,8 +23,11 @@ export function registerModelsCommand(program: Command): void {
     .alias('m')
 
   addFilterFlags(cmd).addOption(
-    new Option('--sort <field>', 'Sort by field (default: tokens)')
-      .choices(['cost', 'tokens', 'messages'])
+    new Option('--sort <field>', 'Sort by field (default: tokens)').choices([
+      'cost',
+      'tokens',
+      'messages',
+    ])
   )
 
   cmd.action(async opts => {
@@ -162,9 +165,12 @@ function formatModelsWithGateway(
     ).padEnd(MODEL_W)
 
     // Apply dim to '—' after padding so the padding width is computed on the plain string
-    const gwCell = gwCost !== undefined
-      ? gwStr.padStart(GW_W)
-      : (useColor ? dim(gwStr.padStart(GW_W)) : gwStr.padStart(GW_W))
+    const gwCell =
+      gwCost !== undefined
+        ? gwStr.padStart(GW_W)
+        : useColor
+          ? dim(gwStr.padStart(GW_W))
+          : gwStr.padStart(GW_W)
     lines.push(
       '  ' +
         (useColor ? COLORS.value(modelDisplay) : modelDisplay) +

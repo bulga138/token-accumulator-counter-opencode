@@ -368,7 +368,10 @@ export function registerTuiCommand(program: Command): void {
             const useCompactView = (process.stdout.columns || 80) < 100
             const modelsChrome = 7 // header + hint + blank + blank + pagination lines
             const linesPerModel = useCompactView ? 3 : 9
-            const modelsPerPage = Math.max(1, Math.floor((availableRows - modelsChrome) / linesPerModel))
+            const modelsPerPage = Math.max(
+              1,
+              Math.floor((availableRows - modelsChrome) / linesPerModel)
+            )
 
             if (modelStats.length === 0) {
               content = `\n${COLORS.label.bold('Models')}\n\nNo model data available.\n`

@@ -148,7 +148,11 @@ export function formatDailyMarkdown(daily: DailyStats[], label: string): string 
   return lines.join('\n')
 }
 
-export function formatProjectsMarkdown(projects: ProjectStats[], label: string, hasGateway = false): string {
+export function formatProjectsMarkdown(
+  projects: ProjectStats[],
+  label: string,
+  hasGateway = false
+): string {
   const costHeader = hasGateway ? 'Local $' : 'Cost'
   const lines: string[] = [
     `# 🌮 TACO — Projects${label ? ` · ${label}` : ''}`,
@@ -165,7 +169,11 @@ export function formatProjectsMarkdown(projects: ProjectStats[], label: string, 
   return lines.join('\n')
 }
 
-export function formatSessionsMarkdown(sessions: SessionStats[], label: string, hasGateway = false): string {
+export function formatSessionsMarkdown(
+  sessions: SessionStats[],
+  label: string,
+  hasGateway = false
+): string {
   const costHeader = hasGateway ? 'Local $' : 'Cost'
   const lines: string[] = [
     `# 🌮 TACO — Sessions${label ? ` · ${label}` : ''}`,
@@ -182,7 +190,11 @@ export function formatSessionsMarkdown(sessions: SessionStats[], label: string, 
   return lines.join('\n')
 }
 
-export function formatAgentsMarkdown(agents: AgentStats[], label: string, hasGateway = false): string {
+export function formatAgentsMarkdown(
+  agents: AgentStats[],
+  label: string,
+  hasGateway = false
+): string {
   const costHeader = hasGateway ? 'Local $' : 'Cost'
   const lines: string[] = [
     `# 🌮 TACO — Agents${label ? ` · ${label}` : ''}`,
@@ -199,7 +211,12 @@ export function formatAgentsMarkdown(agents: AgentStats[], label: string, hasGat
   return lines.join('\n')
 }
 
-export function formatTrendsMarkdown(trends: PeriodStats[], period: string, label: string, hasGateway = false): string {
+export function formatTrendsMarkdown(
+  trends: PeriodStats[],
+  period: string,
+  label: string,
+  hasGateway = false
+): string {
   const costHeader = hasGateway ? 'Local $' : 'Cost'
   const deltaCostHeader = hasGateway ? 'Δ Local $' : 'Δ Cost'
   const lines: string[] = [

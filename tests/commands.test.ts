@@ -43,7 +43,9 @@ async function runTacoNoDb(...args: string[]): Promise<string> {
   const chunks: string[] = []
   const origLog = console.log
   const origWrite = process.stdout.write
-  console.log = (...a: unknown[]) => { chunks.push(a.map(String).join(' ') + '\n') }
+  console.log = (...a: unknown[]) => {
+    chunks.push(a.map(String).join(' ') + '\n')
+  }
   process.stdout.write = ((chunk: string | Uint8Array) => {
     chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString())
     return true

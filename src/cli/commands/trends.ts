@@ -17,13 +17,20 @@ export function registerTrendsCommand(program: Command): void {
 
   addFilterFlags(cmd)
     .addOption(
-      new Option('--period <period>', 'Period grouping (default: week)')
-        .choices(['day', 'week', 'month'])
+      new Option('--period <period>', 'Period grouping (default: week)').choices([
+        'day',
+        'week',
+        'month',
+      ])
     )
     .option('--periods <n>', 'Number of periods to compare (default: 4)')
     .addOption(
-      new Option('--sort <field>', 'Sort by field (default: date)')
-        .choices(['cost', 'tokens', 'date', 'messages'])
+      new Option('--sort <field>', 'Sort by field (default: date)').choices([
+        'cost',
+        'tokens',
+        'date',
+        'messages',
+      ])
     )
 
   cmd.action(async opts => {

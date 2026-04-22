@@ -30,8 +30,15 @@ export function registerExportCommand(program: Command): void {
     .command('export')
     .description('Export raw data to stdout or a file')
     .addArgument(
-      new Argument('[target]', 'Data to export')
-        .choices(['overview', 'models', 'providers', 'daily', 'projects', 'sessions', 'agents'])
+      new Argument('[target]', 'Data to export').choices([
+        'overview',
+        'models',
+        'providers',
+        'daily',
+        'projects',
+        'sessions',
+        'agents',
+      ])
     )
     .alias('e')
 

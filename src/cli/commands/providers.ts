@@ -19,8 +19,11 @@ export function registerProvidersCommand(program: Command): void {
     .alias('p')
 
   addFilterFlags(cmd).addOption(
-    new Option('--sort <field>', 'Sort by field (default: tokens)')
-      .choices(['cost', 'tokens', 'messages'])
+    new Option('--sort <field>', 'Sort by field (default: tokens)').choices([
+      'cost',
+      'tokens',
+      'messages',
+    ])
   )
 
   cmd.action(async opts => {

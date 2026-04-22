@@ -20,8 +20,12 @@ export function registerSessionsCommand(program: Command): void {
   addFilterFlags(cmd)
     .option('--limit <n>', 'Number of sessions to show', '20')
     .addOption(
-      new Option('--sort <field>', 'Sort by field (default: date)')
-        .choices(['cost', 'tokens', 'date', 'messages'])
+      new Option('--sort <field>', 'Sort by field (default: date)').choices([
+        'cost',
+        'tokens',
+        'date',
+        'messages',
+      ])
     )
 
   cmd.action(async opts => {

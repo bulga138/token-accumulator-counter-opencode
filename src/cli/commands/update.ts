@@ -6,7 +6,7 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { pipeline } from 'stream/promises'
 import { getColors } from '../../theme/index.js'
-import { getVersion } from '../index.js'
+import { completionCachePath } from './completion.js'
 
 const REPO = 'bulga138/taco'
 const REPO_URL = `https://github.com/${REPO}`
@@ -194,6 +194,28 @@ async function runUpdate(currentVersion: string, opts: UpdateOptions): Promise<v
     console.log(chalk.bold(`Updating to ${targetTag}...`))
     console.log()
     runInstaller(installerPath, targetTag)
+
+    // Regenerate cached completion file if it exists so completions stay in sync
+    for (const shell of ['bash', 'zsh', 'fish'] as const) {
+      const cachePath = completionCachePath(shell)
+      if (existsSync(cachePath)) {
+        try {
+          const result = spawnSync(
+            process.execPath,
+            [process.argv[1], 'completion', `--${shell}`, '--install'],
+            {
+              timeout: 15_000,
+              encoding: 'utf8',
+            }
+          )
+          if (result.status === 0) {
+            ok(`Regenerated ${shell} completion cache.`)
+          }
+        } catch {
+          // Non-fatal — completions will just be stale until user runs taco completion --install
+        }
+      }
+    }
   } finally {
     // Clean up temp dir
     try {
@@ -215,8 +237,30 @@ export function registerUpdateCommand(program: Command): void {
     .option('--force', 'Force update even if already on the target version')
 
   cmd.action(async (opts: UpdateOptions) => {
-    // Get current version from embedded VERSION or package.json
-    const currentVersion = getVersion()
+    // Read current version from package.json (already loaded in index.ts, but
+    // we import directly here to keep this module self-contained)
+    let currentVersion = '0.0.0'
+    try {
+      const { readFileSync } = await import('fs')
+      const { fileURLToPath } = await import('url')
+      const { dirname, join: pathJoin } = await import('path')
+
+      const modFile = fileURLToPath(import.meta.url)
+      let dir = dirname(modFile)
+      for (let i = 0; i < 5; i++) {
+        const candidate = pathJoin(dir, 'package.json')
+        if (existsSync(candidate)) {
+          const pkg = JSON.parse(readFileSync(candidate, 'utf-8')) as { version?: string }
+          currentVersion = pkg.version ?? currentVersion
+          break
+        }
+        const parent = dirname(dir)
+        if (parent === dir) break
+        dir = parent
+      }
+    } catch {
+      // fall through with default
+    }
 
     console.log()
     console.log(chalk.bold('🌮 TACO — Update'))

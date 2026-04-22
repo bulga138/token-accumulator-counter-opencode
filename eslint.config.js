@@ -45,6 +45,7 @@ export default [
       'dist/**',
       'node_modules/**',
       'coverage/**',
+      'scripts/**',
       '*.config.js',
       '*.config.ts',
     ],

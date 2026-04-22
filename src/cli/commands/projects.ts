@@ -17,11 +17,13 @@ export function registerProjectsCommand(program: Command): void {
     .description('Show per-project token usage breakdown')
     .alias('proj')
 
-  addFilterFlags(cmd)
-    .addOption(
-      new Option('--sort <field>', 'Sort by field (default: cost)')
-        .choices(['cost', 'tokens', 'messages'])
-    )
+  addFilterFlags(cmd).addOption(
+    new Option('--sort <field>', 'Sort by field (default: cost)').choices([
+      'cost',
+      'tokens',
+      'messages',
+    ])
+  )
 
   cmd.action(async opts => {
     const config = getConfig()
@@ -54,9 +56,12 @@ export function registerProjectsCommand(program: Command): void {
 
 function sortProjectStats(stats: ProjectStats[], sort: SortField): ProjectStats[] {
   switch (sort) {
-    case 'tokens': return [...stats].sort((a, b) => b.tokens.total - a.tokens.total)
-    case 'messages': return [...stats].sort((a, b) => b.messageCount - a.messageCount)
+    case 'tokens':
+      return [...stats].sort((a, b) => b.tokens.total - a.tokens.total)
+    case 'messages':
+      return [...stats].sort((a, b) => b.messageCount - a.messageCount)
     case 'cost':
-    default: return [...stats].sort((a, b) => b.cost - a.cost)
+    default:
+      return [...stats].sort((a, b) => b.cost - a.cost)
   }
 }
