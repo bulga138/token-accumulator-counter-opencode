@@ -12,8 +12,12 @@ export function addFilterFlags(cmd: Command): Command {
     .option('--project <path>', 'Filter to a specific project directory')
     .option('--agent <type>', 'Filter by agent type (build, plan, explore)')
     .addOption(
-      new Option('--format <format>', 'Output format (default: visual)')
-        .choices(['visual', 'json', 'csv', 'markdown'])
+      new Option('--format <format>', 'Output format (default: visual)').choices([
+        'visual',
+        'json',
+        'csv',
+        'markdown',
+      ])
     )
     .option('--db <path>', 'Override OpenCode database path')
 }

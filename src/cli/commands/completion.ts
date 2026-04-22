@@ -1,4 +1,7 @@
 import type { Command, Option } from 'commander'
+import { mkdirSync, writeFileSync, chmodSync } from 'fs'
+import { homedir } from 'os'
+import { join } from 'path'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -292,6 +295,32 @@ function detectShell(): 'bash' | 'zsh' | 'fish' {
   return 'bash'
 }
 
+// ─── Cache helpers ────────────────────────────────────────────────────────────
+
+/** Directory where the pre-generated completion file lives. */
+export function completionCacheDir(): string {
+  return join(homedir(), '.cache', 'taco', 'completions')
+}
+
+/** Full path for the cached completion file for the given shell. */
+export function completionCachePath(shell: 'bash' | 'zsh' | 'fish'): string {
+  const ext = shell === 'fish' ? 'fish' : shell === 'zsh' ? 'zsh' : 'bash'
+  return join(completionCacheDir(), `taco.${ext}`)
+}
+
+/**
+ * Write the completion script to the cache dir and return the file path.
+ * The directory is created with 0700 and the file with 0600.
+ */
+export function installCompletion(shell: 'bash' | 'zsh' | 'fish', script: string): string {
+  const dir = completionCacheDir()
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const filePath = completionCachePath(shell)
+  writeFileSync(filePath, script, { encoding: 'utf8', mode: 0o600 })
+  chmodSync(filePath, 0o600)
+  return filePath
+}
+
 // ─── Command registration ──────────────────────────────────────────────────────
 
 export function registerCompletionCommand(program: Command): void {
@@ -301,24 +330,33 @@ export function registerCompletionCommand(program: Command): void {
     .option('--bash', 'Output bash completion script')
     .option('--zsh', 'Output zsh completion script')
     .option('--fish', 'Output fish completion script')
+    .option(
+      '--install',
+      'Write completion script to cache and print the source line for ~/.zshrc (fast startup)'
+    )
     .addHelpText(
       'after',
       `
 Examples:
-  # Auto-detect shell and install permanently
+  # Recommended: install once, source instantly on every shell startup
+  taco completion --install
+  # Then add the printed line to ~/.zshrc (replaces the slow eval approach)
+
+  # Legacy eval approach (slow — spawns Node on every terminal open):
   eval "$(taco completion)"
 
-  # Install for bash
+  # Install for a specific shell
+  taco completion --bash --install
+  taco completion --zsh --install
+  taco completion --fish --install
+
+  # Write directly to a file (manual approach)
   taco completion --bash >> ~/.bashrc && source ~/.bashrc
-
-  # Install for zsh
   taco completion --zsh >> ~/.zshrc && source ~/.zshrc
-
-  # Install for fish
   taco completion --fish > ~/.config/fish/completions/taco.fish
 `
     )
-    .action((opts: { bash?: boolean; zsh?: boolean; fish?: boolean }) => {
+    .action((opts: { bash?: boolean; zsh?: boolean; fish?: boolean; install?: boolean }) => {
       // Resolve target shell
       let shell: 'bash' | 'zsh' | 'fish'
       if (opts.bash) shell = 'bash'
@@ -340,6 +378,31 @@ Examples:
           break
         default:
           script = generateBash(cmds)
+      }
+
+      if (opts.install) {
+        const filePath = installCompletion(shell, script)
+        process.stdout.write(`\nCompletion script installed to:\n  ${filePath}\n\n`)
+
+        if (shell === 'zsh') {
+          process.stdout.write(
+            `Add this line to ~/.zshrc (replacing any existing eval "$(taco completion)" line):\n\n` +
+              `  [[ -f ${filePath} ]] && source ${filePath}\n\n` +
+              `Then reload: source ~/.zshrc\n\n`
+          )
+        } else if (shell === 'bash') {
+          process.stdout.write(
+            `Add this line to ~/.bashrc or ~/.bash_profile:\n\n` +
+              `  [[ -f ${filePath} ]] && source ${filePath}\n\n` +
+              `Then reload: source ~/.bashrc\n\n`
+          )
+        } else {
+          process.stdout.write(
+            `Copy the file to your fish completions directory:\n\n` +
+              `  cp ${filePath} ~/.config/fish/completions/taco.fish\n\n`
+          )
+        }
+        return
       }
 
       process.stdout.write(script)

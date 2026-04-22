@@ -542,11 +542,17 @@ export async function exportFixtureDbToFile(filePath: string): Promise<void> {
   `)
 
   // Copy session data via the wrapper
-  const sessions = wrapper.prepare<{
-    id: string; title: string; directory: string;
-    parent_id: string | null; project_id: string | null;
-    time_created: number; time_updated: number;
-  }>('SELECT * FROM session').all()
+  const sessions = wrapper
+    .prepare<{
+      id: string
+      title: string
+      directory: string
+      parent_id: string | null
+      project_id: string | null
+      time_created: number
+      time_updated: number
+    }>('SELECT * FROM session')
+    .all()
 
   for (const s of sessions) {
     db2.run(
@@ -555,15 +561,22 @@ export async function exportFixtureDbToFile(filePath: string): Promise<void> {
     )
   }
 
-  const messages = wrapper.prepare<{
-    id: string; session_id: string; time_created: number; data: string;
-  }>('SELECT * FROM message').all()
+  const messages = wrapper
+    .prepare<{
+      id: string
+      session_id: string
+      time_created: number
+      data: string
+    }>('SELECT * FROM message')
+    .all()
 
   for (const m of messages) {
-    db2.run(
-      'INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)',
-      [m.id, m.session_id, m.time_created, m.data]
-    )
+    db2.run('INSERT INTO message (id, session_id, time_created, data) VALUES (?, ?, ?, ?)', [
+      m.id,
+      m.session_id,
+      m.time_created,
+      m.data,
+    ])
   }
 
   wrapper.close()

@@ -25,8 +25,13 @@ export function registerConfigCommand(program: Command): void {
     .description('View or edit TACO configuration')
     .allowUnknownOption(true)
     .addArgument(
-      new Argument('[subcommand]', 'Subcommand to run')
-        .choices(['path', 'init', 'set', 'gateway', 'show'])
+      new Argument('[subcommand]', 'Subcommand to run').choices([
+        'path',
+        'init',
+        'set',
+        'gateway',
+        'show',
+      ])
     )
     .argument('[key]', 'Config key (for set subcommand)')
     .argument('[value]', 'Config value (for set subcommand)')

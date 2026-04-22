@@ -47,20 +47,12 @@ jobs:
 
       - name: Build executable
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
-          BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          COMMIT_HASH=${GITHUB_SHA::8}
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
-          bun build ./bin/taco.ts \
-            --outfile ./taco \
-            --target ${{ matrix.bun_target }} \
-            --compile \
-            --minify \
-            --bytecode \
-            --sourcemap \
-            --define VERSION=\"${VERSION}\" \
-            --define BUILD_TIME=\"${BUILD_TIME}\" \
-            --define COMMIT_HASH=\"${COMMIT_HASH}\"
+          TACO_VERSION=$(node -p "require('./package.json').version")
+          bun build ./bin/taco.ts --outfile ./taco --target ${{ matrix.bun_target }} --compile --define "TACO_VERSION='${TACO_VERSION}'" --minify --bytecode --sourcemap 
+          if [ ! -f taco ] && [ ! -f taco.exe ]; then
+            echo "ERROR: Binary 'taco' or 'taco.exe' not created after bun run bundle"
+            exit 1
+          fi
 
       - name: Make executable
         run: chmod +x taco taco.exe 2>/dev/null || true

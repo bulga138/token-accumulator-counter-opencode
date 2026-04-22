@@ -37,7 +37,7 @@
     "lint:fix": "eslint src bin --ext .ts --fix",
     "format": "prettier --write \"src/**/*.ts\" \"bin/**/*.ts\" \"tests/**/*.ts\"",
     "format:check": "prettier --check \"src/**/*.ts\" \"bin/**/*.ts\" \"tests/**/*.ts\"",
-    "bundle": "bun build ./bin/taco.ts --outfile ./taco --compile --minify --bytecode --sourcemap",
+    "bundle": "bun scripts/bundle.ts",
     "bundle:all": "bun run bundle:linux && bun run bundle:windows && bun run bundle:macos",
     "bundle:linux": "bun build ./bin/taco.ts --outfile ./taco-linux-x64 --target bun-linux-x64 --compile --minify --bytecode --sourcemap",
     "bundle:windows": "bun build ./bin/taco.ts --outfile ./taco-windows-x64.exe --target bun-windows-x64 --compile --minify --bytecode --sourcemap",

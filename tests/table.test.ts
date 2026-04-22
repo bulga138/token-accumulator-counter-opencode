@@ -65,20 +65,29 @@ describe('buildTable', () => {
   })
 
   it('right-aligns value column content', () => {
-    const lines = buildTable([nameCol(), valueCol], [ROWS[0]!], { useColor: false, terminalWidth: 80 })
+    const lines = buildTable([nameCol(), valueCol], [ROWS[0]!], {
+      useColor: false,
+      terminalWidth: 80,
+    })
     // Value "1000" should be right-padded to width 8 → right side ends with "    1000"
     expect(lines[2]).toMatch(/1000\s*$/)
   })
 
   it('left-aligns flex column content', () => {
-    const lines = buildTable([nameCol(), valueCol], [ROWS[0]!], { useColor: false, terminalWidth: 80 })
+    const lines = buildTable([nameCol(), valueCol], [ROWS[0]!], {
+      useColor: false,
+      terminalWidth: 80,
+    })
     // "alpha" should appear near the start of the row
     expect(lines[2]!.trimStart()).toMatch(/^alpha/)
   })
 
   it('clamps flex column to maxWidth', () => {
     const maxWidth = 6
-    const lines = buildTable([nameCol(maxWidth), valueCol], ROWS, { useColor: false, terminalWidth: 80 })
+    const lines = buildTable([nameCol(maxWidth), valueCol], ROWS, {
+      useColor: false,
+      terminalWidth: 80,
+    })
     const visLen = (s: string) => s.replace(/\x1B\[[0-9;]*m/g, '').length
     // Each data cell in the name column should not exceed maxWidth
     for (const line of lines.slice(2)) {
@@ -112,7 +121,11 @@ describe('buildTable', () => {
   it('applies zebra striping to even rows when useColor=true', () => {
     // We can't easily test ANSI codes without a TTY snapshot, but we can confirm
     // the line count is still correct and the content is present.
-    const lines = buildTable([nameCol(), valueCol], ROWS, { useColor: false, stripe: false, terminalWidth: 80 })
+    const lines = buildTable([nameCol(), valueCol], ROWS, {
+      useColor: false,
+      stripe: false,
+      terminalWidth: 80,
+    })
     expect(lines).toHaveLength(5)
     for (const row of ROWS) {
       expect(lines.join('\n')).toContain(row.name)

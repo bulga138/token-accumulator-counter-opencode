@@ -18,8 +18,10 @@ import { existsSync, readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
 
-// Build-time constants injected by bun build --define
-declare const VERSION: string | undefined
+// TACO_VERSION is replaced at bundle time by `bun build --define TACO_VERSION='"x.y.z"'.
+// When running from source (bun run / node dist/) the constant is undefined and we fall
+// back to reading package.json from disk.
+declare const TACO_VERSION: string | undefined
 
 /**
  * Walk up from a starting directory until package.json is found.
@@ -38,52 +40,54 @@ function findPackageJsonFrom(start: string, maxDepth = 5): string | null {
 }
 
 /**
- * Robustly locate package.json regardless of the execution environment:
- * - Normal: node dist/bin/taco.js  (walks up from dist/bin/)
- * - Source: bun run bin/taco.ts    (walks up from bin/)
- * - Installed: ~/.taco/dist/bin/   (walks up to ~/.taco/)
- * - Bun --compile bundle: import.meta.url is /$bunfs/root/... so we fall
- *   back to process.argv[1] which is the real binary path on disk.
+ * Resolve the package version string.
+ *
+ * Priority:
+ *  1. Compile-time constant (TACO_VERSION) — set by `bun build --define`.
+ *     This is the only reliable source inside a Bun --compile binary because
+ *     import.meta.url resolves to a virtual /$bunfs/root/... path that has no
+ *     real package.json alongside it.
+ *  2. Walk up the filesystem from the module file / argv[1] — works for
+ *     `node dist/bin/taco.js` and `bun run bin/taco.ts` (source runs).
  */
-function findPackageJson(): string {
+function resolveVersion(): string {
+  // 1. Compile-time constant injected by bun build --define
+  if (typeof TACO_VERSION !== 'undefined' && TACO_VERSION) {
+    return TACO_VERSION
+  }
+
+  // 2. Runtime fallback: find package.json on disk
   const candidates: string[] = []
 
-  // Primary: the directory of the current module file
   try {
     const modFile = fileURLToPath(import.meta.url)
     candidates.push(dirname(modFile))
   } catch {
-    // import.meta.url may not be a file:// URL in some bundlers
+    // import.meta.url may not be a file:// URL in all environments
   }
 
-  // Fallback: the directory of the executable (works for Bun --compile)
   if (process.argv[1]) {
     candidates.push(dirname(process.argv[1]))
   }
 
   for (const start of candidates) {
-    const found = findPackageJsonFrom(start)
-    if (found) return found
+    const pkgPath = findPackageJsonFrom(start)
+    if (pkgPath) {
+      try {
+        return (JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version: string }).version
+      } catch {
+        // malformed package.json — try next candidate
+      }
+    }
   }
-  return ''
+
+  return 'unknown'
 }
 
-// Try to load package.json, fallback to embedded VERSION for compiled binaries
-let packageJson: { version: string } | null = null
-const pkgPath = findPackageJson()
-if (pkgPath && existsSync(pkgPath)) {
-  try {
-    packageJson = JSON.parse(readFileSync(pkgPath, 'utf-8'))
-  } catch {
-    // ignore
-  }
-}
+const version = resolveVersion()
 
 export function getVersion(): string {
-  // Priority: embedded VERSION > package.json > fallback
-  if (typeof VERSION === 'string' && VERSION) return VERSION
-  if (packageJson?.version) return packageJson.version
-  return 'unknown'
+  return version
 }
 
 // ── Braille art embedded as a constant
@@ -141,7 +145,7 @@ export function createProgram(): Command {
 
   // Custom --version that shows art then version string
   program.version(
-    `\n${TACO_ART}\n\n🌮 TACO v${getVersion()} — Token Accumulator Counter for OpenCode`,
+    `\n${TACO_ART}\n\n🌮 TACO v${version} — Token Accumulator Counter for OpenCode`,
     '-V, --version',
     'Display version number'
   )
