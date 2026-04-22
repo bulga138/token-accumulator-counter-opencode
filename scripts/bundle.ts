@@ -12,7 +12,7 @@ import { readFileSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
+const repoRoot = join(import.meta.dir, '..')
 const pkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf-8')) as {
   version: string
 }
