@@ -1,6 +1,7 @@
 import { Command } from 'commander'
 import { registerOverviewCommand } from './commands/overview.js'
 import { registerModelsCommand } from './commands/models.js'
+import { registerMonthCommand } from './commands/month.js'
 import { registerProvidersCommand } from './commands/providers.js'
 import { registerDailyCommand } from './commands/daily.js'
 import { registerProjectsCommand } from './commands/projects.js'
@@ -13,6 +14,7 @@ import { registerTodayCommand } from './commands/today.js'
 import { registerConfigCommand } from './commands/config-cmd.js'
 import { registerHealthCommand } from './commands/health.js'
 import { registerUpdateCommand } from './commands/update.js'
+import { registerUninstallCommand } from './commands/uninstall.js'
 import { registerCompletionCommand } from './commands/completion.js'
 import { existsSync, readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
@@ -153,6 +155,7 @@ export function createProgram(): Command {
   // Register all sub-commands
   registerOverviewCommand(program)
   registerModelsCommand(program)
+  registerMonthCommand(program)
   registerProvidersCommand(program)
   registerDailyCommand(program)
   registerProjectsCommand(program)
@@ -165,6 +168,7 @@ export function createProgram(): Command {
   registerConfigCommand(program)
   registerHealthCommand(program)
   registerUpdateCommand(program)
+  registerUninstallCommand(program)
   registerCompletionCommand(program)
 
   // Default action (no sub-command) → run TUI if TTY available, otherwise overview

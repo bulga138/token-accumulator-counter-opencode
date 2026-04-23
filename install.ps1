@@ -13,9 +13,21 @@ param(
     [switch]$PreferSource
 )
 
+
+# --- Architecture detection (used by both piped and local paths) ---
+function Get-Architecture {
+    $arch = $env:PROCESSOR_ARCHITECTURE
+    switch ($arch) {
+        "AMD64" { return "x64" }
+        "ARM64" { return "arm64" }
+        default { return "unknown" }
+    }
+}
+
+
 # --- Remote bootstrap: detect piped execution (irm | iex) ---
 # When piped, $MyInvocation.MyCommand.Path is empty — no local repo files exist.
-# Download the requested (or latest) release archive and re-invoke from the extracted dir.
+# Try binary download first; only fall back to source instructions if unavailable.
 #
 # Install specific version (set env var before piping):
 #   $env:TACO_VERSION="v0.1.4"; irm https://raw.githubusercontent.com/bulga138/taco/master/install.ps1 | iex
@@ -27,11 +39,9 @@ if (-not $MyInvocation.MyCommand.Path) {
     # Allow caller to pin a version via environment variable
     $LatestTag = $env:TACO_VERSION
     if ($LatestTag) {
-        # Normalise: ensure it starts with 'v'
         if (-not $LatestTag.StartsWith('v')) { $LatestTag = "v$LatestTag" }
         Write-Host "Installing TACO $LatestTag (pinned)..."
     } else {
-        # Discover latest tag via git ls-remote — no API rate limits
         Write-Host "Fetching latest TACO release..."
         try {
             $GitOutput = & git ls-remote --tags "https://github.com/$Repo.git" 2>$null
@@ -52,34 +62,76 @@ if (-not $MyInvocation.MyCommand.Path) {
         Write-Host "Latest release: $LatestTag"
     }
 
+
+    $OS = "windows"
+    $Arch = Get-Architecture
     $Version = $LatestTag -replace '^v', ''
-    $ArchiveUrl = "https://github.com/$Repo/releases/download/$LatestTag/taco-release-$Version.tar.gz"
-    $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) "taco-install-$(Get-Random)"
-    New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+
+    # Determine install directory
+    $InstallDir = if ($System) { "C:\Program Files\taco" } else { "$env:USERPROFILE\.taco" }
+    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+
+    # Construct binary name — Windows always gets .exe
+    $BinaryName = "taco-$Version-$OS-$Arch.exe"
+    $BinaryUrl = "https://github.com/$Repo/releases/download/$LatestTag/$BinaryName"
+    $ChecksumUrl = "$BinaryUrl.sha256"
+    $Target = Join-Path $InstallDir "taco.exe"
+
+    Write-Host "Downloading TACO $LatestTag for $OS-$Arch..."
 
     try {
-        Write-Host "Downloading TACO $LatestTag..."
-        $ArchivePath = Join-Path $TempDir "taco-release.tar.gz"
-        Invoke-WebRequest -Uri $ArchiveUrl -OutFile $ArchivePath -ErrorAction Stop
+        Invoke-WebRequest -Uri $BinaryUrl -OutFile "$Target.tmp" -ErrorAction Stop -TimeoutSec 300
 
-        if (Get-Command tar -ErrorAction SilentlyContinue) {
-            tar -xzf $ArchivePath -C $TempDir
-            } else {
-                Write-Host "Error: 'tar' not found. Please install tar or use PowerShell 7+." -ForegroundColor Red
+         # Optional checksum verification
+        try {
+            $ChecksumFile = "$Target.sha256"
+            Invoke-WebRequest -Uri $ChecksumUrl -OutFile $ChecksumFile -ErrorAction Stop -TimeoutSec 30
+            $ExpectedChecksum = (Get-Content $ChecksumFile -Raw).Trim().Split()[0]
+            $ActualChecksum = (Get-FileHash "$Target.tmp" -Algorithm SHA256).Hash.ToLower()
+            if ($ExpectedChecksum -eq $ActualChecksum) {
+                Write-Host "  [OK] Checksum verified"
+             } else {
+                Write-Host "  [WARN] Checksum mismatch — binary may be corrupted, aborting" -ForegroundColor Yellow
+                Remove-Item "$Target.tmp" -Force -ErrorAction SilentlyContinue
+                Remove-Item $ChecksumFile -Force -ErrorAction SilentlyContinue
                 return
             }
 
-        $ExtractedScript = Join-Path $TempDir "install.ps1"
-        if (Test-Path $ExtractedScript) {
-            $ScriptArgs = @()
-            if ($System) { $ScriptArgs += "-System" }
-            & $ExtractedScript @ScriptArgs
-        } else {
-            Write-Host "Error: install.ps1 not found in downloaded archive" -ForegroundColor Red
-            return
+        Remove-Item $ChecksumFile -Force -ErrorAction SilentlyContinue
+        } catch {
+            # Checksum not available — continue
         }
-    } finally {
-        Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    
+    Move-Item "$Target.tmp" $Target -Force
+
+        # Add to PATH
+        if (-not $System) {
+            $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
+            if ($UserPath -notlike "*$InstallDir*") {
+                [Environment]::SetEnvironmentVariable("PATH", "$UserPath;$InstallDir", "User")
+            }
+            $env:PATH = "$InstallDir;$env:PATH"
+        }
+
+        Write-Host ""
+        Write-Host "  [OK] TACO $LatestTag installed to $Target" -ForegroundColor Green
+        Write-Host ""
+        Write-Host "Try: taco --help"
+        if (-not (Get-Command taco -ErrorAction SilentlyContinue)) {
+            Write-Host "Restart your terminal, then try: taco"
+        }
+
+        # Warm cache
+        try { & $Target overview --format json 2>&1 | Out-Null } catch {}
+        return
+    } catch {
+        Write-Host "  [ERROR] No pre-built binary available for $OS-$Arch." -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  To install from source, clone and build:"
+        Write-Host "    git clone https://github.com/$Repo.git"
+        Write-Host "    cd taco"
+        Write-Host "    .\install.ps1"
+        return
     }
 } else {
     if ($Help) {
@@ -116,10 +168,7 @@ function Error { param($msg) Write-Host "${Red}  [ERROR]${Reset} $msg" -Foregrou
 
 # Offer to install Bun if not already present
 function Prompt-InstallBun {
-    # Already installed — nothing to do
     if (Get-Command bun -ErrorAction SilentlyContinue) { return }
-
-    # Non-interactive — skip silently
     if (-not [Environment]::UserInteractive) { return }
 
     Write-Host ""
@@ -153,13 +202,11 @@ function Prompt-InstallBun {
         return
     }
 
-    # Add freshly-installed Bun to current session PATH so runtime detection finds it
     $BunBinPath = "$env:USERPROFILE\.bun\bin"
     if (Test-Path $BunBinPath) {
         $env:PATH = "$BunBinPath;$env:PATH"
     }
 
-    # Verify
     if (Get-Command bun -ErrorAction SilentlyContinue) {
         $BunVer = & bun --version 2>$null
         Success "Bun $BunVer installed successfully"
@@ -169,20 +216,6 @@ function Prompt-InstallBun {
     }
 }
 
-# --- Detect Architecture ---
-function Get-Architecture {
-    $arch = $env:PROCESSOR_ARCHITECTURE
-    switch ($arch) {
-        "AMD64" { return "x64" }
-        "ARM64" { return "arm64" }
-        default { return "unknown" }
-    }
-}
-
-$OS = "windows"
-$Arch = Get-Architecture
-$Ext = ".exe"
-
 # --- Try to download pre-built binary ---
 function Download-Binary {
     param($Version, $InstallDir)
@@ -190,13 +223,13 @@ function Download-Binary {
     $Repo = "bulga138/taco"
     
     $VersionNoV = $Version -replace '^v', ''
-    $BinaryName = "taco-$VersionNoV-$OS-$Arch$Ext"
+    $BinaryName = "taco-$VersionNoV-$OS-$Arch.exe"
     $BinaryUrl = "https://github.com/$Repo/releases/download/$Version/$BinaryName"
-    $ChecksumUrl = "https://github.com/$Repo/releases/download/$Version/$BinaryName.sha256"
+    $ChecksumUrl = "$BinaryUrl.sha256"
+
     Info "Checking for pre-built binary: $BinaryName..."
     
     try {
-        # Check if binary exists
         $response = Invoke-WebRequest -Uri $BinaryUrl -Method Head -ErrorAction Stop -TimeoutSec 10
         if ($response.StatusCode -eq 200) {
             Info "Downloading pre-built binary..."
@@ -205,7 +238,6 @@ function Download-Binary {
             try {
                 Invoke-WebRequest -Uri $BinaryUrl -OutFile $TmpFile -ErrorAction Stop -TimeoutSec 300
                 
-                # Download and verify checksum if available
                 $ChecksumFile = Join-Path $InstallDir "$BinaryName.sha256"
                 try {
                     Invoke-WebRequest -Uri $ChecksumUrl -OutFile $ChecksumFile -ErrorAction Stop -TimeoutSec 30
@@ -249,6 +281,9 @@ function Download-Binary {
 Write-Host ""
 Write-Host "${Bold}🌮 Installing TACO${Reset}"
 Write-Host ""
+
+$OS = "windows"
+$Arch = Get-Architecture
 Info "Detected platform: ${OS}-${Arch}"
 
 # Get script directory
@@ -258,7 +293,6 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Info "Checking Node.js version..."
 $NodeCmd = Get-Command node -ErrorAction SilentlyContinue
 if (-not $NodeCmd) {
-    # Try common Windows locations
     $PossiblePaths = @(
         "C:\Program Files\nodejs\node.exe",
         "C:\Program Files (x86)\nodejs\node.exe",
@@ -276,7 +310,7 @@ if (-not $NodeCmd) {
 }
 
 if (-not $NodeCmd) {
-    Error "Node.js is required but not installed. Please install Node.js 18+ from https://nodejs.org"
+    Error "Node.js is required but not installed. Please install Node.js 22+ from https://nodejs.org"
 }
 
 $NodeVersion = & node --version
@@ -301,6 +335,25 @@ if ($System) {
 
 Info "Installation directory: $InstallDir"
 
+# Discover latest tag if not already set via env
+if (-not $LatestTag) {
+    Info "Fetching latest TACO release..."
+    try {
+        $GitOutput = & git ls-remote --tags "https://github.com/bulga138/taco.git" 2>$null
+        $LatestTag = $GitOutput `
+            | Select-String -Pattern 'v(\d+\.\d+\.\d+)$' `
+            | ForEach-Object { $_.Matches[0].Value } `
+            | Sort-Object { [version]($_ -replace '^v','') } `
+            | Select-Object -Last 1
+        if ($LatestTag) { Info "Latest release: $LatestTag" }
+    } catch {
+        $LatestTag = $null
+    }
+    if (-not $LatestTag) {
+        Warn "Could not determine latest release — binary download will be skipped"
+    }
+}
+
 # --- Try binary download first ---
 $BinaryInstalled = $false
 if (-not $PreferSource -and $LatestTag) {
@@ -313,7 +366,7 @@ if (-not $PreferSource -and $LatestTag) {
 # --- Build from source (fallback) ---
 if (-not $BinaryInstalled) {
     if ($PreferSource) {
-        Info "Building from source (--PreferSource specified)..."
+        Info "Building from source (-PreferSource specified)..."
     } else {
         Info "Building from source..."
     }
@@ -347,26 +400,16 @@ if (-not $BinaryInstalled) {
 Write-Host ""
 Write-Host "${Bold}[1/2] Installing taco...${Reset}"
 
-# Create install directory
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 
-# If we have a standalone binary, we're done
 if ($BinaryInstalled) {
     Info "Pre-built binary installed successfully"
-    
-    # Copy uninstall scripts for binary installation
-    if (Test-Path "$ScriptDir\uninstall.ps1") {
-        Copy-Item -Path "$ScriptDir\uninstall.ps1" -Destination $InstallDir -Force
-    }
-    if (Test-Path "$ScriptDir\uninstall.sh") {
-        Copy-Item -Path "$ScriptDir\uninstall.sh" -Destination $InstallDir -Force
-    }
-    
+
+   # Binary installs are self-contained: taco update and taco uninstall handle maintenance
     Success "Installed to $InstallDir\taco.exe"
 } else {
     # Need runtime wrapper (Node.js/Bun)
     
-    # Check for Bun
     $BunCmd = Get-Command bun -ErrorAction SilentlyContinue
     $NodeCmd = Get-Command node -ErrorAction SilentlyContinue
 
@@ -381,39 +424,33 @@ if ($BinaryInstalled) {
         Error "Neither Bun nor Node.js found. Please install Bun: https://bun.sh or Node.js: https://nodejs.org"
     }
 
-    # Create wrapper scripts
     $TacoWrapper = "$InstallDir\taco.cmd"
     $TacoPs1 = "$InstallDir\taco.ps1"
     $TacoSh = "$InstallDir\taco"
 
-    # CMD wrapper (for Windows Command Prompt)
     @"
 @echo off
 $RunCmd "$InstallDir\dist\bin\taco.js" %*
 "@ | Set-Content -Path $TacoWrapper -Encoding ASCII
 
-    # PowerShell wrapper
     @"
 #!/usr/bin/env pwsh
 $RunCmd '$InstallDir\dist\bin\taco.js' @args
 "@ | Set-Content -Path $TacoPs1 -Encoding UTF8
 
-    # Shell wrapper (for Git Bash)
     @"
 #!/bin/sh
 exec $RunCmd "$InstallDir/dist/bin/taco.js" "`$@"
 "@ | Set-Content -Path $TacoSh -Encoding UTF8
 
-    # Remove stale dist before copying so no old compiled files survive a rename/delete.
     if (Test-Path "$InstallDir\dist") {
         Remove-Item -Path "$InstallDir\dist" -Recurse -Force
     }
     Copy-Item -Path "$ScriptDir\dist" -Destination $InstallDir -Recurse -Force
-    # Remove dist/package.json so version is read from the correct $InstallDir/package.json
     Remove-Item -Path "$InstallDir\dist\package.json" -Force -ErrorAction SilentlyContinue
 
-    # Copy package.json, uninstall scripts, and install dependencies
     Copy-Item -Path "$ScriptDir\package.json" -Destination $InstallDir -Force
+    # Copy uninstall scripts for source-based installs
     if (Test-Path "$ScriptDir\uninstall.ps1") {
         Copy-Item -Path "$ScriptDir\uninstall.ps1" -Destination $InstallDir -Force
     }
@@ -434,8 +471,6 @@ exec $RunCmd "$InstallDir/dist/bin/taco.js" "`$@"
     Success "Installed to $InstallDir"
 }
 
-Success "Installed to $InstallDir"
-
 # Add to PATH
 if (-not $System) {
     $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
@@ -444,7 +479,6 @@ if (-not $System) {
         Info "Added $InstallDir to your user PATH"
     }
     
-    # Also add to current session so it works immediately
     $env:PATH = "$InstallDir;$env:PATH"
     Info "Added to current session PATH - taco is ready to use now!"
 }
@@ -492,7 +526,6 @@ Write-Host ""
 Write-Host ""
 Write-Host "${Bold}Post-install verification${Reset}"
 
-# Determine which executable to check
 if ($BinaryInstalled) {
     $TacoExe = "$InstallDir\taco.exe"
 } else {
@@ -501,9 +534,7 @@ if ($BinaryInstalled) {
 
 if (Test-Path $TacoExe) {
     try {
-        # Capture the output as a single string
         $RawVersionOutput = (& $TacoExe --version 2>$null) | Out-String
-        # Use Regex to find the version number (e.g., v0.1.1)
         if ($RawVersionOutput -match 'v(\d+\.\d+\.\d+)') {
             $TacoVersion = $matches[1]
             Success "taco v$TacoVersion is working"
@@ -525,19 +556,12 @@ if (Get-Command bun -ErrorAction SilentlyContinue) {
     Info "Runtime: Node.js $NodeVer"
 }
 
-# Warm the cache so the first real 'taco' run is instant.
-# 'overview --format json' is the only command that writes the heatmap cache and
-# takes the lightest code path (single SQLite aggregation, no streaming).
 Info "Warming cache..."
 try {
-    if ($BinaryInstalled) {
-        & $TacoExe overview --format json 2>&1 | Out-Null
-    } else {
-        & $TacoExe overview --format json 2>&1 | Out-Null
-    }
+    & $TacoExe overview --format json 2>&1 | Out-Null
     Success "Cache ready"
 } catch {
-    # Non-fatal — cache will be built on first use
+    # Non-fatal
 }
 
 if (-not (Get-Command taco -ErrorAction SilentlyContinue)) {

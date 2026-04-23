@@ -45,12 +45,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Set VERSION env
+        run: echo "VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+
       - name: Build executable
         run: |
-          TACO_VERSION=$(node -p "require('./package.json').version")
-          bun build ./bin/taco.ts --outfile ./taco --target ${{ matrix.bun_target }} --compile --define "TACO_VERSION='${TACO_VERSION}'" --minify --bytecode --sourcemap 
+          bun build ./bin/taco.ts --outfile ./taco --target ${{ matrix.bun_target }} --compile --define "TACO_VERSION='${VERSION}'" --minify --bytecode --sourcemap 
           if [ ! -f taco ] && [ ! -f taco.exe ]; then
-            echo "ERROR: Binary 'taco' or 'taco.exe' not created after bun run bundle"
+            echo "ERROR: Binary 'taco' or 'taco.exe' not created after bun build"
             exit 1
           fi
 
@@ -69,11 +71,10 @@ jobs:
       - name: Rename
         run: |
           mv taco taco.exe 2>/dev/null || true
-          mv taco.exe taco-${{ env.VERSION }}-${{ matrix.os_name }}-${{ matrix.arch }}
+          mv taco.exe taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}
 
       - name: Generate checksum
         run: |
-          VERSION=${{ env.VERSION }}
           BINARY="taco-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}"
           sha256sum "$BINARY" > "$BINARY.sha256"
 

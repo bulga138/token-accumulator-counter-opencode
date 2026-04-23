@@ -15,9 +15,29 @@ set -uo pipefail
 
 REPO="bulga138/taco"
 
+# --- OS / Architecture detection (used by both piped and local paths) ---
+detect_os() {
+  case "$OSTYPE" in
+    darwin*)  echo "macos" ;;
+    linux*)   echo "linux" ;;
+    msys*|win32*|cygwin*) echo "windows" ;;
+    *) echo "unknown" ;;
+  esac
+}
+
+detect_arch() {
+  local arch
+  arch=$(uname -m)
+  case "$arch" in
+    x86_64|amd64) echo "x64" ;;
+    aarch64|arm64) echo "arm64" ;;
+    *) echo "unknown" ;;
+  esac
+}
+
 # --- Remote bootstrap: detect piped execution (curl | bash) ---
 # When piped, BASH_SOURCE[0] is empty — no local repo files exist.
-# Download the requested (or latest) release archive and re-exec from the extracted dir.
+# Try binary download first; only fall back if unavailable.
 #
 # Install specific version:
 #   curl -sSL https://raw.githubusercontent.com/bulga138/taco/master/install.sh | bash -s -- --version v0.1.4
@@ -27,14 +47,13 @@ if [[ -z "${BASH_SOURCE[0]:-}" ]] || [[ "${BASH_SOURCE[0]}" == "bash" ]]; then
   command -v curl &>/dev/null || { echo "Error: curl is required"; exit 1; }
   command -v tar  &>/dev/null || { echo "Error: tar is required"; exit 1; }
 
-  # Allow caller to pin a version: --version v0.1.3
+  # Allow caller to pin a version: --version v0.1.4
   REQUESTED_VERSION=""
   for _arg in "$@"; do
     case "$_arg" in
       --version=*) REQUESTED_VERSION="${_arg#--version=}" ;;
     esac
   done
-  # Also handle --version <value> (two-argument form)
   _prev=""
   for _arg in "$@"; do
     [[ "$_prev" == "--version" ]] && { REQUESTED_VERSION="$_arg"; break; }
@@ -42,12 +61,10 @@ if [[ -z "${BASH_SOURCE[0]:-}" ]] || [[ "${BASH_SOURCE[0]}" == "bash" ]]; then
   done
 
   if [[ -n "$REQUESTED_VERSION" ]]; then
-    # Normalise: ensure it starts with 'v'
     [[ "$REQUESTED_VERSION" == v* ]] || REQUESTED_VERSION="v${REQUESTED_VERSION}"
     LATEST_TAG="$REQUESTED_VERSION"
     echo "Installing TACO ${LATEST_TAG} (pinned)..."
   else
-    # Discover latest tag via git ls-remote — no API rate limits
     echo "Fetching latest TACO release..."
     LATEST_TAG=$(git ls-remote --tags "https://github.com/${REPO}.git" 2>/dev/null \
       | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+$' \
@@ -63,18 +80,109 @@ if [[ -z "${BASH_SOURCE[0]:-}" ]] || [[ "${BASH_SOURCE[0]}" == "bash" ]]; then
   fi
 
   VERSION="${LATEST_TAG#v}"
-  ARCHIVE_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/taco-release-${VERSION}.tar.gz"
-  TEMP_DIR=$(mktemp -d)
-  trap 'rm -rf "$TEMP_DIR"' EXIT
+  OS=$(detect_os)
+  ARCH=$(detect_arch)
 
-  echo "Downloading TACO ${LATEST_TAG}..."
-  export LATEST_TAG
-  curl -fsSL -H "User-Agent: Mozilla/5.0" "$ARCHIVE_URL" | tar xz -C "$TEMP_DIR"
+  # Determine install directory from args
+  _SYSTEM=false
+  for _arg in "$@"; do
+    case "$_arg" in --system|-s) _SYSTEM=true ;; esac
+  done
+  if [[ "$_SYSTEM" == "true" ]]; then
+    _INSTALL_DIR="/usr/local/bin"
+  else
+    _INSTALL_DIR="${HOME}/.taco"
+  fi
+  mkdir -p "$_INSTALL_DIR"
 
-  # Re-exec from the extracted archive — BASH_SOURCE[0] will be a real path
-  export REPO
-  bash "$TEMP_DIR/install.sh" "$@"
-else
+  # Construct binary name — Windows gets .exe
+  BINARY_NAME="taco-${VERSION}-${OS}-${ARCH}"
+  [[ "$OS" == "windows" ]] && BINARY_NAME="${BINARY_NAME}.exe"
+  BINARY_URL="https://github.com/${REPO}/releases/download/${LATEST_TAG}/${BINARY_NAME}"
+
+  TARGET="${_INSTALL_DIR}/taco"
+  [[ "$OS" == "windows" ]] && TARGET="${TARGET}.exe"
+
+  echo "Downloading TACO ${LATEST_TAG} for ${OS}-${ARCH}..."
+  if curl -fsSL -H "User-Agent: Mozilla/5.0" --connect-timeout 30 --max-time 300 \
+      "$BINARY_URL" -o "${TARGET}.tmp" 2>/dev/null; then
+
+    # Optional checksum verification
+    CHECKSUM_URL="${BINARY_URL}.sha256"
+    if curl -fsSL -H "User-Agent: Mozilla/5.0" --connect-timeout 10 -m 30 \
+        "$CHECKSUM_URL" -o "${TARGET}.sha256" 2>/dev/null; then
+      _expected=$(awk '{print $1}' "${TARGET}.sha256")
+      if command -v sha256sum >/dev/null 2>&1; then
+        _actual=$(sha256sum "${TARGET}.tmp" | awk '{print $1}')
+      else
+        _actual=$(shasum -a 256 "${TARGET}.tmp" | awk '{print $1}')
+      fi
+      if [[ "$_expected" == "$_actual" ]]; then
+        echo "  [OK] Checksum verified"
+      else
+        echo "  [WARN] Checksum mismatch — binary may be corrupted, aborting"
+        rm -f "${TARGET}.tmp" "${TARGET}.sha256"
+        exit 1
+      fi
+      rm -f "${TARGET}.sha256"
+    fi
+
+    mv "${TARGET}.tmp" "$TARGET"
+    chmod +x "$TARGET" 2>/dev/null || true
+
+    # Add to PATH
+    if [[ "$_SYSTEM" != "true" ]] && [[ "$_INSTALL_DIR" == "${HOME}/.taco" ]]; then
+      export PATH="${HOME}/.taco:$PATH"
+      SHELL_RC=""
+      if [[ -f "$HOME/.bashrc" ]]; then
+        SHELL_RC="$HOME/.bashrc"
+      elif [[ -f "$HOME/.zshrc" ]]; then
+        SHELL_RC="$HOME/.zshrc"
+      fi
+      if [[ -n "$SHELL_RC" ]] && ! grep -q '\.taco' "$SHELL_RC" 2>/dev/null; then
+        echo 'export PATH="$HOME/.taco:$PATH"' >> "$SHELL_RC"
+      fi
+      # Shell completions
+      if [[ -n "$SHELL_RC" ]] && ! grep -q 'taco completion' "$SHELL_RC" 2>/dev/null; then
+        echo '' >> "$SHELL_RC"
+        echo '# taco shell completions' >> "$SHELL_RC"
+        echo 'eval "$(taco completion)" 2>/dev/null || true' >> "$SHELL_RC"
+      fi
+      # Fish shell completions
+      if [[ "$SHELL" == *fish* ]] || command -v fish &>/dev/null; then
+        FISH_COMP_DIR="$HOME/.config/fish/completions"
+        if [[ -d "$FISH_COMP_DIR" ]] || mkdir -p "$FISH_COMP_DIR" 2>/dev/null; then
+          "$TARGET" completion --fish > "$FISH_COMP_DIR/taco.fish" 2>/dev/null || true
+        fi
+      fi
+    fi
+
+    echo ""
+    echo "  [OK] TACO ${LATEST_TAG} installed to ${TARGET}"
+    echo ""
+    echo "Try: taco --help"
+    if ! command -v taco &>/dev/null; then
+      echo "Restart your terminal or run: source ${SHELL_RC:-~/.bashrc}"
+    fi
+
+    # Warm the cache
+    "$TARGET" overview --format json >/dev/null 2>&1 || true
+    exit 0
+  else
+    echo "  [ERROR] No pre-built binary available for ${OS}-${ARCH}."
+    echo ""
+    echo "  To install from source, clone and build:"
+    echo "    git clone https://github.com/${REPO}.git"
+    echo "    cd taco"
+    echo "    ./install.sh"
+    exit 1
+  fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Local execution path (./install.sh from a cloned repo)
+# ═══════════════════════════════════════════════════════════════════════════════
+
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # --- Colors ---
@@ -96,10 +204,7 @@ error()   { echo -e "${RED}  [ERROR]${RESET} $*" >&2; exit 1; }
 
 # Offer to install Bun if not already present
 prompt_install_bun() {
-  # Already installed — nothing to do
   command -v bun &>/dev/null && return 0
-
-  # Non-interactive (e.g. curl | bash) — skip silently
   [[ -t 0 ]] || return 0
 
   echo ""
@@ -159,13 +264,11 @@ prompt_install_bun() {
       ;;
   esac
 
-  # Add freshly-installed Bun to current session PATH so runtime detection finds it
   if [[ -d "$HOME/.bun/bin" ]]; then
     export BUN_INSTALL="$HOME/.bun"
     export PATH="$BUN_INSTALL/bin:$PATH"
   fi
 
-  # Verify
   if command -v bun &>/dev/null; then
     success "Bun $(bun --version) installed successfully"
   else
@@ -174,47 +277,20 @@ prompt_install_bun() {
   fi
 }
 
-echo ""
-echo -e "${BOLD}🌮 Installing TACO${RESET}"
-echo ""
-
-# --- Detect OS ---
-detect_os() {
-  case "$OSTYPE" in
-    darwin*)  echo "macos" ;;
-    linux*)   echo "linux" ;;
-    msys*|win32*|cygwin*) echo "windows" ;;
-    *) echo "unknown" ;;
-  esac
-}
-
-# --- Detect Architecture ---
-detect_arch() {
-  local arch
-  arch=$(uname -m)
-  case "$arch" in
-    x86_64|amd64) echo "x64" ;;
-    aarch64|arm64) echo "arm64" ;;
-    *) echo "unknown" ;;
-  esac
-}
-
 # --- Try to download pre-built binary ---
 download_binary() {
   local version="$1"
   local install_dir="$2"
   
   local version_no_v="${version#v}"
-  # Construct binary name: taco-{VERSION}-{OS}-{ARCH}
   local binary_name="taco-${version_no_v}-${OS}-${ARCH}"
   [[ "$OS" == "windows" ]] && binary_name="${binary_name}.exe"
   
   local binary_url="https://github.com/${REPO}/releases/download/${version}/${binary_name}"
-  local checksum_url="https://github.com/${REPO}/releases/download/${version}/${binary_name}.sha256"
-  
+  local checksum_url="${binary_url}.sha256"
+
   info "Checking for pre-built binary: ${binary_name}..."
   
-  # Check if binary exists (HEAD request with retry)
   local http_code
   http_code=$(curl -fsSL -H "User-Agent: Mozilla/5.0" -o /dev/null -w "%{http_code}" -m 10 "$binary_url" 2>/dev/null) || http_code="000"
   
@@ -223,16 +299,16 @@ download_binary() {
     local tmp_file="${install_dir}/${binary_name}.tmp"
     
     if ! curl -fsSL -H "User-Agent: Mozilla/5.0" --connect-timeout 30 --max-time 300 "$binary_url" -o "$tmp_file"; then
-      warn "Download failed (HTTP $http_code), will build from source instead"
+      warn "Download failed, will build from source instead"
       rm -f "$tmp_file"
       return 1
     fi
     
-    # Download and verify checksum if available
     local checksum_file="${install_dir}/${binary_name}.sha256"
     if curl -fsSL -H "User-Agent: Mozilla/5.0" --connect-timeout 10 -m 30 "$checksum_url" -o "$checksum_file" 2>/dev/null; then
       info "Verifying checksum..."
-      local expected_checksum=$(awk '{print $1}' "$checksum_file")
+      local expected_checksum
+      expected_checksum=$(awk '{print $1}' "$checksum_file")
       local actual_checksum
       if command -v sha256sum >/dev/null 2>&1; then
         actual_checksum=$(sha256sum "$tmp_file" | awk '{print $1}')
@@ -253,10 +329,8 @@ download_binary() {
       info "No checksum file available, skipping verification"
     fi
     
-    # Make executable
     chmod +x "$tmp_file" 2>/dev/null || true
     
-    # Move to final location (without .tmp)
     local final_path="${install_dir}/taco"
     [[ "$OS" == "windows" ]] && final_path="${final_path}.exe"
     mv "$tmp_file" "$final_path"
@@ -268,6 +342,10 @@ download_binary() {
     return 1
   fi
 }
+
+echo ""
+echo -e "${BOLD}🌮 Installing TACO${RESET}"
+echo ""
 
 OS=$(detect_os)
 ARCH=$(detect_arch)
@@ -295,14 +373,26 @@ for arg in "$@"; do
   esac
 done
 
+# --- Discover latest tag if not already set ---
+if [[ -z "$LATEST_TAG" ]]; then
+  info "Fetching latest TACO release..."
+  LATEST_TAG=$(git ls-remote --tags "https://github.com/${REPO}.git" 2>/dev/null \
+    | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+$' \
+    | sort -V \
+    | tail -1 || true)
+  if [[ -z "$LATEST_TAG" ]]; then
+    warn "Could not determine latest release — binary download will be skipped"
+  else
+    info "Latest release: ${LATEST_TAG}"
+  fi
+fi
+
 info "Detected platform: ${OS}-${ARCH}"
 
 # --- Check Node.js version ---
 info "Checking Node.js version..."
 
-# Try to find node in PATH first
 if ! command -v node &> /dev/null; then
-  # On Windows Git Bash, try common Node.js locations
   if [[ "$OS" == "windows" ]]; then
     if [[ -f "/c/Program Files/nodejs/node.exe" ]]; then
       export PATH="/c/Program Files/nodejs:$PATH"
@@ -314,7 +404,6 @@ if ! command -v node &> /dev/null; then
   fi
 fi
 
-# Check again after adding Windows paths
 if ! command -v node &> /dev/null; then
   error "Node.js is required but not installed. Please install Node.js 18+ from https://nodejs.org"
 fi
@@ -339,7 +428,6 @@ if [[ "$SYSTEM" == "true" ]]; then
     INSTALL_DIR="/usr/local/bin"
   fi
 else
-  # User install - use ~/.taco directory
   INSTALL_DIR="${HOME}/.taco"
 fi
 
@@ -353,7 +441,6 @@ if [[ "$PREFER_SOURCE" != "true" ]] && [[ -n "$LATEST_TAG" ]]; then
 fi
 
 # --- Build from source (fallback) ---
-# Skip if binary was already installed
 if [[ "$BINARY_INSTALLED" == "true" ]]; then
   info "Using pre-built binary, skipping source build"
 elif [[ -f "$REPO_DIR/tsconfig.json" ]]; then
@@ -384,27 +471,12 @@ fi
 echo ""
 echo -e "${BOLD}[1/2] Installing taco...${RESET}"
 
-# Create install directory
 mkdir -p "$INSTALL_DIR"
 
-# If we have a standalone binary, we're done
 if [[ "$BINARY_INSTALLED" == "true" ]]; then
   info "Pre-built binary installed successfully"
   
-  # Copy uninstall script for binary installation
-  if [[ -f "$REPO_DIR/uninstall.sh" ]]; then
-    cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/"
-    chmod +x "$INSTALL_DIR/uninstall.sh"
-  fi
-  
-  if [[ -f "$REPO_DIR/update.sh" ]]; then
-    cp "$REPO_DIR/update.sh" "$INSTALL_DIR/"
-    chmod +x "$INSTALL_DIR/update.sh"
-  fi
-  if [[ -f "$REPO_DIR/uninstall.ps1" ]]; then
-    cp "$REPO_DIR/uninstall.ps1" "$INSTALL_DIR/"
-  fi
-  
+  # Binary installs are self-contained: taco update and taco uninstall handle maintenance
   if [[ "$OS" == "windows" ]]; then
     success "Installed to $INSTALL_DIR/taco.exe"
   else
@@ -413,7 +485,6 @@ if [[ "$BINARY_INSTALLED" == "true" ]]; then
 else
   # Need runtime wrapper (Node.js/Bun)
 
-  # Detect runtime (prefer Bun for speed)
   if command -v bun &> /dev/null; then
     info "Bun detected - using Bun for faster performance"
     RUNTIME="bun"
@@ -425,86 +496,76 @@ else
     error "Neither Bun nor Node.js found. Please install Bun: https://bun.sh or Node.js: https://nodejs.org"
   fi
 
-  # Create wrapper script
   TACO_WRAPPER="$INSTALL_DIR/taco"
-
-if [[ "$OS" == "windows" ]]; then
-  # Windows batch wrapper (for CMD)
-  cat > "$TACO_WRAPPER.bat" << EOF
+  
+  if [[ "$OS" == "windows" ]]; then
+    cat > "$TACO_WRAPPER.bat" << EOF
 @echo off
 $RUNCMD "%~dp0\dist\bin\taco.js" %*
 EOF
   
-  # PowerShell wrapper
   cat > "$TACO_WRAPPER.ps1" << EOF
 #!/usr/bin/env pwsh
 $RUNCMD '$INSTALL_DIR\dist\bin\taco.js' @args
 EOF
   
-  # Shell wrapper for Git Bash (no extension)
   cat > "$TACO_WRAPPER" << EOF
 #!/bin/sh
 exec $RUNCMD "$INSTALL_DIR/dist/bin/taco.js" "\$@"
 EOF
   chmod +x "$TACO_WRAPPER"
-  
-  # Remove stale dist before copying so no old compiled files survive a rename/delete.
+
   rm -rf "$INSTALL_DIR/dist"
   cp -r "$REPO_DIR/dist" "$INSTALL_DIR/"
   chmod +x "$INSTALL_DIR/dist/bin/taco.js" 2>/dev/null || true
-  # Remove dist/package.json so version is read from the correct $INSTALL_DIR/package.json
   rm -f "$INSTALL_DIR/dist/package.json"
-  if [[ -f "$REPO_DIR/uninstall.sh" ]]; then
-    cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/"
-    chmod +x "$INSTALL_DIR/uninstall.sh"
-  fi
   
-  success "Installed to $INSTALL_DIR/taco.bat, taco.ps1, and taco (shell)"
-else
-  # Unix wrapper script
-  cat > "$TACO_WRAPPER" << EOF
-#!/bin/sh
-exec $RUNCMD "$INSTALL_DIR/dist/bin/taco.js" "\$@"
-EOF
-  chmod +x "$TACO_WRAPPER"
-  
-  # Remove stale dist before copying so no old compiled files survive a rename/delete.
-  rm -rf "$INSTALL_DIR/dist"
-  cp -r "$REPO_DIR/dist" "$INSTALL_DIR/"
-  chmod +x "$INSTALL_DIR/dist/bin/taco.js" 2>/dev/null || true
-  # Remove dist/package.json so version is read from the correct $INSTALL_DIR/package.json
-  rm -f "$INSTALL_DIR/dist/package.json"
-
-  # Copy package.json, uninstall script, and install dependencies
-  cp "$REPO_DIR/package.json" "$INSTALL_DIR/"
   if [[ -f "$REPO_DIR/uninstall.sh" ]]; then
-    cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/"
-    chmod +x "$INSTALL_DIR/uninstall.sh"
-  fi
-  info "Installing dependencies..."
-  (cd "$INSTALL_DIR" && npm install --omit=dev --silent) || warn "Failed to install dependencies, TACO may not work properly"
-
-  # Verify SQLite driver availability (better-sqlite3 is optional — native build may fail)
-  if [ "$RUNTIME" = "node" ]; then
-    if node -e "const m = require('better-sqlite3'); const db = new m(':memory:'); db.close()" 2>/dev/null; then
-      info "SQLite driver: better-sqlite3 (native)"
-    else
-      warn "better-sqlite3 native addon not available — falling back to sql.js (WASM)"
-      warn "This is normal on some systems. TACO will work correctly but may be slightly slower."
+      cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/"
+      chmod +x "$INSTALL_DIR/uninstall.sh"
     fi
-  fi
+    if [[ -f "$REPO_DIR/uninstall.ps1" ]]; then
+      cp "$REPO_DIR/uninstall.ps1" "$INSTALL_DIR/"
+fi
+  success "Installed to $INSTALL_DIR/taco.bat, taco.ps1, and taco (shell)"
+  else
+    cat > "$TACO_WRAPPER" << EOF
+#!/bin/sh
+exec $RUNCMD "$INSTALL_DIR/dist/bin/taco.js" "\$@"
+EOF
+    chmod +x "$TACO_WRAPPER"
 
-  success "Installed to $INSTALL_DIR/taco"
+    rm -rf "$INSTALL_DIR/dist"
+    cp -r "$REPO_DIR/dist" "$INSTALL_DIR/"
+    chmod +x "$INSTALL_DIR/dist/bin/taco.js" 2>/dev/null || true
+    rm -f "$INSTALL_DIR/dist/package.json"
+
+    cp "$REPO_DIR/package.json" "$INSTALL_DIR/"
+    if [[ -f "$REPO_DIR/uninstall.sh" ]]; then
+      cp "$REPO_DIR/uninstall.sh" "$INSTALL_DIR/"
+      chmod +x "$INSTALL_DIR/uninstall.sh"
+    fi
+    info "Installing dependencies..."
+    (cd "$INSTALL_DIR" && npm install --omit=dev --silent) || warn "Failed to install dependencies, TACO may not work properly"
+
+    if [ "$RUNTIME" = "node" ]; then
+      if node -e "const m = require('better-sqlite3'); const db = new m(':memory:'); db.close()" 2>/dev/null; then
+        info "SQLite driver: better-sqlite3 (native)"
+      else
+        warn "better-sqlite3 native addon not available — falling back to sql.js (WASM)"
+        warn "This is normal on some systems. TACO will work correctly but may be slightly slower."
+      fi
+    fi
+
+    success "Installed to $INSTALL_DIR/taco"
   fi
 fi
 
 # --- Add to PATH ---
 if [[ "$LOCAL_INSTALL" == "true" ]] && [[ "$INSTALL_DIR" == "${HOME}/.taco" ]]; then
-  # Add to current session so it works immediately
   export PATH="$HOME/.taco:$PATH"
   info "Added ~/.taco to current session PATH - taco is ready to use now!"
   
-  # Also add to shell config for future sessions
   SHELL_RC=""
   if [[ -f "$HOME/.bashrc" ]]; then
     SHELL_RC="$HOME/.bashrc"
@@ -517,10 +578,7 @@ if [[ "$LOCAL_INSTALL" == "true" ]] && [[ "$INSTALL_DIR" == "${HOME}/.taco" ]]; 
     info "Added ~/.taco to PATH in $SHELL_RC for future sessions"
   fi
 
-  # --- Install shell completions ---
-  # Append eval "$(taco completion)" to the shell rc if not already present.
-  # This works for bash and zsh; fish users get a separate message.
-  if [[ -n "$SHELL_RC" ]] && ! grep -q "taco completion" "$SHELL_RC" 2>/dev/null; then
+ if [[ -n "$SHELL_RC" ]] && ! grep -q "taco completion" "$SHELL_RC" 2>/dev/null; then
     echo '' >> "$SHELL_RC"
     echo '# taco shell completions' >> "$SHELL_RC"
     echo 'eval "$(taco completion)" 2>/dev/null || true' >> "$SHELL_RC"
@@ -530,7 +588,6 @@ if [[ "$LOCAL_INSTALL" == "true" ]] && [[ "$INSTALL_DIR" == "${HOME}/.taco" ]]; 
     info "Shell completions already present in $SHELL_RC"
   fi
 
-  # Fish shell: write completion file directly
   if [[ "$SHELL" == *fish* ]] || command -v fish &>/dev/null; then
     FISH_COMP_DIR="$HOME/.config/fish/completions"
     if [[ -d "$FISH_COMP_DIR" ]] || mkdir -p "$FISH_COMP_DIR" 2>/dev/null; then
@@ -591,14 +648,10 @@ else
   info "Runtime: Node.js $(node --version)"
 fi
 
-# Warm the cache so the first real 'taco' run is instant.
-# 'overview --format json' is the only command that writes ~/.cache/taco/ and
-# takes the lightest code path (single SQLite aggregation, no streaming).
 info "Warming cache..."
 "$INSTALL_DIR/taco" overview --format json >/dev/null 2>&1 && success "Cache ready" || true
 
 if ! command -v taco &>/dev/null; then
   info "Restart your terminal or run: source ${SHELL_RC:-~/.zshrc}"
   info "Then try: taco"
-fi
 fi

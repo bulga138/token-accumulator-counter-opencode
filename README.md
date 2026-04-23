@@ -285,35 +285,35 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## Updating
 
-```bash
-./update.sh
-```
+````bash
+taco update              # Update to latest
+taco update --check      # Check for updates without installing
+taco update --version v1.0.3  # Pin to a specific version```
+````
 
 ## Uninstall
 
-**macOS / Linux:**
+```bash
+taco uninstall           # Remove TACO (prompts for confirmation)
+taco uninstall --yes     # Skip confirmation
+taco uninstall --keep-config   # Preserve ~/.config/taco
+```
+
+**Alternatives (source-based installs or if the binary is broken):**
+
+macOS / Linux:
 
 ```bash
 ~/.taco/uninstall.sh
-
 # Or from a local clone:
 ./uninstall.sh
 ```
 
-**Windows (PowerShell):**
+Windows (PowerShell):
 
 ```powershell
-# Using the uninstall script (recommended):
 & "$env:USERPROFILE\.taco\uninstall.ps1"
-
-# Or manually:
-Remove-Item -Recurse -Force "$env:USERPROFILE\.taco"
 ```
-
-**Uninstall options:**
-
-- `--system` / `-System` — Uninstall system-wide installation
-- `--help` / `-Help` — Show help
 
 ## License
 
