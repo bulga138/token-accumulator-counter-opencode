@@ -8,7 +8,12 @@ import type {
   SessionStats,
   PeriodStats,
 } from '../data/types.js'
-import { formatTokens, formatCost, formatPercent } from '../utils/formatting.js'
+import {
+  formatTokens,
+  formatCost,
+  formatEstimatedCost,
+  formatPercent,
+} from '../utils/formatting.js'
 import { formatDuration } from '../utils/dates.js'
 import type { GatewayMetrics } from '../data/gateway-types.js'
 
@@ -108,11 +113,16 @@ export function formatModelsMarkdown(models: ModelStats[], label: string): strin
     '|-------|--------|-------|--------|------|-------|',
   ]
   for (const m of models) {
+    const costStr = m.costEstimated ? formatEstimatedCost(m.cost) : formatCost(m.cost)
     lines.push(
-      `| ${m.modelId} | ${formatTokens(m.tokens.total)} | ${formatTokens(m.tokens.input)} | ${formatTokens(m.tokens.output)} | ${formatCost(m.cost)} | ${formatPercent(m.percentage)} |`
+      `| ${m.modelId} | ${formatTokens(m.tokens.total)} | ${formatTokens(m.tokens.input)} | ${formatTokens(m.tokens.output)} | ${costStr} | ${formatPercent(m.percentage)} |`
     )
   }
   lines.push('')
+  if (models.some(m => m.costEstimated)) {
+    lines.push('> `~$` values are estimated from `opencode.json` pricing (OpenCode recorded $0).')
+    lines.push('')
+  }
   return lines.join('\n')
 }
 

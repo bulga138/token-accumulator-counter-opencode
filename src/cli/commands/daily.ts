@@ -11,7 +11,11 @@ import { addFilterFlags, buildRangeLabel } from '../filters.js'
 import { getConfig } from '../../config/index.js'
 import type { DailyStats, SortField } from '../../data/types.js'
 import type { GatewayDailyActivity } from '../../data/gateway-types.js'
-import { fetchDailyActivity } from '../../data/gateway-litellm.js'
+import {
+  fetchDailyActivity,
+  readGatewayDailyActivity,
+  getCurrentBillingPeriod,
+} from '../../data/gateway-litellm.js'
 
 export function registerDailyCommand(program: Command): void {
   const cmd = program.command('daily').description('Show daily usage breakdown').alias('d')
@@ -37,7 +41,9 @@ export function registerDailyCommand(program: Command): void {
     stats = sortDailyStats(stats, sort)
     const rangeLabel = buildRangeLabel(opts)
 
-    // Fetch gateway daily activity if gateway is configured
+    // Fetch gateway daily activity if gateway is configured.
+    // Strategy: live fetch for the date range, then fill any missing days
+    // from on-disk snapshots (past days are immutable — no network needed).
     let gatewayDays: GatewayDailyActivity[] | null = null
     if (config.gateway && format === 'visual') {
       // Use the filtered date range from the filters, or default to current billing period
@@ -48,10 +54,42 @@ export function registerDailyCommand(program: Command): void {
         ? filters.to.toLocaleDateString('en-CA')
         : new Date().toLocaleDateString('en-CA')
 
+      // Try live fetch first (also auto-persists each day as snapshot)
       const result = await fetchDailyActivity(config.gateway, startDate, endDate)
       if (result && result.days.length > 0) {
         gatewayDays = result.days
       }
+
+      // Fill any gaps from persisted snapshots (covers days not in the live response)
+      const snapshotDays = readGatewayDailyActivity(startDate, endDate)
+      if (snapshotDays.length > 0) {
+        const liveSet = new Set(gatewayDays?.map(d => d.date) ?? [])
+        const missing = snapshotDays.filter(d => !liveSet.has(d.date))
+        if (missing.length > 0) {
+          gatewayDays = [...(gatewayDays ?? []), ...missing].sort((a, b) =>
+            a.date.localeCompare(b.date)
+          )
+        }
+      }
+
+      // Backfill: if we have fewer snapshots than expected, fetch the full
+      // billing period in the background to populate gaps (fire-and-forget).
+      // This runs async so it doesn't block the current render.
+      setImmediate(async () => {
+        try {
+          const { startDate: billStart, endDate: billEnd } = getCurrentBillingPeriod()
+          const billSnaps = readGatewayDailyActivity(billStart, billEnd)
+          // Only backfill if we're clearly missing days (more than 2 gaps)
+          const daysSinceBillStart = Math.floor(
+            (Date.now() - new Date(billStart).getTime()) / 86400000
+          )
+          if (config.gateway && billSnaps.length < daysSinceBillStart - 2) {
+            await fetchDailyActivity(config.gateway, billStart, billEnd)
+          }
+        } catch {
+          /* non-fatal */
+        }
+      })
     }
 
     if (format === 'json') {

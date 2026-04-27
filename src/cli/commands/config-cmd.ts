@@ -16,6 +16,10 @@ import {
   deriveBaseUrl,
   getCurrentBillingPeriod,
   fetchModelSpend,
+  fetchKeyInfo,
+  fetchGlobalSpendModels,
+  fetchAvailableModels,
+  buildAuthHeaders,
 } from '../../data/gateway-litellm.js'
 import { validateGatewayConfig, formatValidationErrors } from '../../utils/config-validation.js'
 
@@ -202,61 +206,116 @@ async function runGatewayTest(): Promise<void> {
     process.exit(1)
   }
 
-  console.log(`\nTesting gateway: ${config.gateway.endpoint}\n`)
+  const baseUrl = deriveBaseUrl(config.gateway.endpoint)
+  console.log(`\nTesting gateway: ${baseUrl}\n`)
 
-  // Force a fresh fetch by clearing live cache first
+  // ── Probe all standard LiteLLM endpoints in parallel ──
+  console.log('  Probing LiteLLM endpoints...\n')
+  const [availability] = await Promise.all([discoverLiteLLMEndpoints(config.gateway)])
+
+  const tick = (ok: boolean) => (ok ? '  ✓' : '  ✗')
+  const row = (ok: boolean, path: string, desc: string) =>
+    `${tick(ok)}  ${path.padEnd(30)} ${ok ? desc : 'not available'}`
+
+  console.log(row(availability.keyInfo, '/key/info', 'per-key spend + budget  ← best source'))
+  console.log(row(availability.userInfo, '/user/info', 'per-user spend + budget'))
+  console.log(row(availability.spendLogs, '/spend/logs', 'per-model spend by date range'))
+  console.log(
+    row(availability.dailyActivity, '/user/daily/activity', 'per-day breakdown with tokens')
+  )
+  console.log(row(availability.spendTags, '/spend/tags', 'spend by user-agent / tag'))
+  console.log(row(availability.modelInfo, '/model/info', 'model pricing rates'))
+  console.log(row(availability.models, '/models', 'available model list'))
+  console.log(
+    row(availability.globalSpendModels, '/global/spend/models', 'org-wide model spend  (admin)')
+  )
+  console.log(row(availability.healthReadiness, '/health/readiness', 'gateway health status'))
+
+  // ── Health check ──
+  if (availability.healthReadiness) {
+    try {
+      const r = await fetch(`${baseUrl}/health/readiness`, {
+        headers: buildAuthHeaders(config.gateway.auth),
+        signal: AbortSignal.timeout(5000),
+      })
+      const body = (await r.json()) as {
+        status?: string
+        litellm_version?: string
+        db?: string
+        cache?: string
+      }
+      const status = body.status ?? 'unknown'
+      const version = body.litellm_version ? `  LiteLLM ${body.litellm_version}` : ''
+      const db = body.db ? `  db:${body.db}` : ''
+      const cache = body.cache ? `  cache:${body.cache}` : ''
+      console.log(`\n  Health: ${status}${version}${db}${cache}`)
+    } catch {
+      /* non-fatal */
+    }
+  }
+
+  // ── Primary endpoint metrics (from configured endpoint + JSONPath mappings) ──
+  console.log('\n  Primary endpoint metrics:\n')
   clearGatewayCache()
 
   const metrics = await fetchGatewayMetrics(config.gateway)
 
   if (!metrics) {
-    console.error('Gateway fetch failed. Check your endpoint URL and API key.')
+    console.error('  ✗ Primary endpoint fetch failed. Check endpoint URL and API key.')
     process.exit(1)
   }
 
-  console.log('  Gateway metrics:\n')
   console.log(`    Total spend:   ${formatCost(metrics.totalSpend)}`)
   if (metrics.budgetLimit !== null) {
     const pct = ((metrics.totalSpend / metrics.budgetLimit) * 100).toFixed(1)
-    console.log(`    Budget limit:  ${formatCost(metrics.budgetLimit)}  (${pct}% used)`)
-  }
-  if (metrics.budgetResetAt) {
-    const d = new Date(metrics.budgetResetAt)
-    console.log(`    Budget resets: ${d.toLocaleDateString(undefined, { dateStyle: 'medium' })}`)
-  }
-  if (metrics.budgetDuration) {
-    console.log(`    Period:        ${metrics.budgetDuration}`)
+    console.log(`    Budget:        ${formatCost(metrics.budgetLimit)}  (${pct}% used)`)
   }
   if (metrics.teamSpend !== null) {
-    console.log(
-      `    Team spend:    ${formatCost(metrics.teamSpend)}${metrics.teamName ? `  (${metrics.teamName})` : ''}`
-    )
+    const label = metrics.teamName ? `Team (${metrics.teamName}):` : 'Team spend:'
+    console.log(`    ${label} ${formatCost(metrics.teamSpend)}`)
   }
-  if (metrics.teamBudgetLimit !== null) {
-    const pct =
-      metrics.teamSpend !== null
-        ? `  (${((metrics.teamSpend / metrics.teamBudgetLimit) * 100).toFixed(1)}% used)`
-        : ''
-    console.log(`    Team budget:   ${formatCost(metrics.teamBudgetLimit)}${pct}`)
+
+  const hostname = (() => {
+    try {
+      return new URL(metrics.endpoint).hostname
+    } catch {
+      return metrics.endpoint
+    }
+  })()
+  const ageMs = Date.now() - metrics.fetchedAt
+  const ageStr =
+    ageMs < 60000
+      ? `${Math.round(ageMs / 1000)}s ago`
+      : ageMs < 3600000
+        ? `${Math.round(ageMs / 60000)}m ago`
+        : `${Math.round(ageMs / 3600000)}h ago`
+  const cacheStr = metrics.cached ? `cached ${ageStr}` : 'live'
+  console.log(`    Source:        ${hostname}  (${cacheStr})`)
+
+  // ── /key/info — per-key spend (most accurate) ──
+  if (availability.keyInfo) {
+    const keyInfo = await fetchKeyInfo(config.gateway)
+    if (keyInfo) {
+      console.log(`\n  Key info  (${keyInfo.keyName ?? keyInfo.keyHash.slice(0, 16) + '...'}):\n`)
+      console.log(`    Key spend:     ${formatCost(keyInfo.spend)}`)
+      if (keyInfo.maxBudget !== null) {
+        const pct = ((keyInfo.spend / keyInfo.maxBudget) * 100).toFixed(1)
+        console.log(`    Key budget:    ${formatCost(keyInfo.maxBudget)}  (${pct}% used)`)
+      }
+      if (keyInfo.budgetResetAt) {
+        const d = new Date(keyInfo.budgetResetAt)
+        console.log(
+          `    Key resets:    ${d.toLocaleDateString(undefined, { dateStyle: 'medium' })}`
+        )
+      }
+      if (keyInfo.lastActive) {
+        const d = new Date(keyInfo.lastActive)
+        console.log(`    Last active:   ${d.toLocaleString()}`)
+      }
+    }
   }
-  console.log(`\n    Fetched from:  ${metrics.endpoint}`)
 
-  // ── Probe LiteLLM standard endpoints ──
-  console.log('\n  Probing LiteLLM endpoints...\n')
-  const availability = await discoverLiteLLMEndpoints(config.gateway)
-  const baseUrl = deriveBaseUrl(config.gateway.endpoint)
-
-  const tick = (ok: boolean) => (ok ? '  ✓' : '  ✗')
-  console.log(
-    `${tick(availability.spendLogs)}  /spend/logs          ${availability.spendLogs ? '(per-model spend — enhances `taco models`)' : 'not available'}`
-  )
-  console.log(
-    `${tick(availability.dailyActivity)}  /user/daily/activity ${availability.dailyActivity ? '(daily breakdown — enhances `taco daily`)' : 'not available'}`
-  )
-  console.log(
-    `${tick(availability.modelInfo)}  /model/info          ${availability.modelInfo ? '(model pricing rates)' : 'not available'}`
-  )
-
+  // ── /spend/logs — per-model spend breakdown ──
   if (availability.spendLogs) {
     const { startDate, endDate } = getCurrentBillingPeriod()
     console.log(`\n  Fetching model spend (${startDate} → ${endDate})...`)
@@ -271,6 +330,37 @@ async function runGatewayTest(): Promise<void> {
         console.log(`    ... and ${spendResult.modelSpend.length - 5} more models`)
       }
       console.log(`\n    Total gateway spend: ${formatCost(spendResult.totalSpend)}`)
+    }
+  }
+
+  // ── /global/spend/models — org-wide spend (admin) ──
+  if (availability.globalSpendModels) {
+    console.log(`\n  Fetching org-wide model spend...`)
+    const globalSpend = await fetchGlobalSpendModels(config.gateway)
+    if (globalSpend && globalSpend.length > 0) {
+      console.log(`\n  Top models by org spend:\n`)
+      const top = globalSpend.slice(0, 5)
+      for (const { model, spend } of top) {
+        console.log(`    ${model.padEnd(50)} ${formatCost(spend)}`)
+      }
+      if (globalSpend.length > 5) {
+        console.log(`    ... and ${globalSpend.length - 5} more models`)
+      }
+    }
+  }
+
+  // ── /models — available model list ──
+  if (availability.models) {
+    console.log(`\n  Fetching available models...`)
+    const models = await fetchAvailableModels(config.gateway)
+    if (models && models.length > 0) {
+      console.log(`\n  Available models (${models.length}):\n`)
+      for (const model of models.slice(0, 20)) {
+        console.log(`    ${model}`)
+      }
+      if (models.length > 20) {
+        console.log(`    ... and ${models.length - 20} more`)
+      }
     }
   }
 

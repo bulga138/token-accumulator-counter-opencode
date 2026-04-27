@@ -52,6 +52,38 @@ export interface GatewayFieldMapping {
 }
 
 /**
+ * JSONPath mappings for a date-range metrics endpoint.
+ *
+ * Used by `dailyMetricsEndpoint` to extract today-only spend and per-model
+ * breakdown from an endpoint that accepts start_date / end_date query params.
+ *
+ * The response shape this is designed for:
+ * {
+ *   "summary": { "total_spend": 80.32, "max_budget": 600.0 },
+ *   "model_spend": [{ "model": "vertex_ai/...", "spend": 57.85 }],
+ *   "daily": [{ "date": "2026-04-27", "spend": 80.32, "prompt_tokens": ... }]
+ * }
+ */
+export interface DailyMetricsFieldMapping {
+  /** JSONPath to today's total spend. e.g. "$.summary.total_spend" */
+  totalSpend: string
+  /**
+   * JSONPath to the array of per-model spend objects.
+   * Each element must have a "model" string and a "spend" number.
+   * e.g. "$.model_spend"
+   */
+  modelSpend?: string
+  /**
+   * Within each model_spend element, the field names for model name and spend.
+   * Defaults to { model: "model", spend: "spend" }.
+   */
+  modelSpendFields?: {
+    model: string
+    spend: string
+  }
+}
+
+/**
  * Full configuration block for one gateway endpoint.
  *
  * Example (LiteLLM):
@@ -82,6 +114,20 @@ export interface GatewayConfig {
   auth: GatewayAuth
   /** JSONPath mappings from the response to standard metric fields. */
   mappings: GatewayFieldMapping
+  /**
+   * Optional secondary endpoint that accepts start_date / end_date query params
+   * and returns spend data for that specific date range.
+   *
+   * When configured, `taco today` calls this endpoint with today's date to show
+   * real today-only gateway spend (instead of billing-period totals).
+   * The same auth config as the primary endpoint is used.
+   */
+  dailyMetricsEndpoint?: {
+    /** Full URL. start_date and end_date query params will be appended automatically. */
+    url: string
+    /** JSONPath mappings to extract spend and model breakdown from the response. */
+    mappings: DailyMetricsFieldMapping
+  }
   /**
    * How long (in minutes) to cache live gateway data.
    * Defaults to 15. Set to 0 to always fetch fresh data.

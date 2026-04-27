@@ -349,3 +349,195 @@ export function getBudgetStatus(db: Database): BudgetCheck {
 
   return result || { todayCost: 0, monthCost: 0 }
 }
+
+// ─── Session detail ───────────────────────────────────────────────────────────
+
+export interface SessionToolCall {
+  callId: string
+  tool: string
+  status: 'completed' | 'error' | 'pending' | string
+  /** Abbreviated summary of the input (e.g. file path, command). */
+  inputSummary: string | null
+  /** Whether the output was truncated by the model. */
+  outputTruncated: boolean
+}
+
+export interface SessionMessage {
+  messageId: string
+  timeCreated: number
+  timeCompleted: number | null
+  role: 'assistant' | 'user'
+  modelId: string | null
+  providerId: string | null
+  agent: string | null
+  mode: string | null
+  tokens: {
+    input: number
+    output: number
+    cacheRead: number
+    cacheWrite: number
+    reasoning: number
+    total: number
+  }
+  cost: number
+  finish: string | null
+  tools: SessionToolCall[]
+}
+
+export interface SessionDetail {
+  sessionId: string
+  title: string | null
+  directory: string | null
+  timeCreated: number
+  timeUpdated: number
+  /** Summary edit stats if OpenCode computed them. */
+  summaryAdditions: number | null
+  summaryDeletions: number | null
+  summaryFiles: number | null
+  messages: SessionMessage[]
+}
+
+/** Load full session detail by session ID, including all messages and tool calls. */
+export function loadSessionDetail(db: Database, sessionId: string): SessionDetail | null {
+  // Load session metadata
+  const session = db
+    .prepare<{
+      id: string
+      title: string | null
+      directory: string | null
+      time_created: number
+      time_updated: number
+      summary_additions: number | null
+      summary_deletions: number | null
+      summary_files: number | null
+    }>(
+      `SELECT id, title, directory, time_created, time_updated,
+              summary_additions, summary_deletions, summary_files
+       FROM session WHERE id = ?`
+    )
+    .get([sessionId])
+
+  if (!session) return null
+
+  // Load all messages (assistant + user) ordered by time
+  const rawMessages = db
+    .prepare<{ id: string; time_created: number; data: string }>(
+      `SELECT id, time_created, data
+       FROM message
+       WHERE session_id = ?
+       ORDER BY time_created ASC`
+    )
+    .all([sessionId])
+
+  // Load all tool-call parts for this session in one query
+  const rawParts = db
+    .prepare<{ message_id: string; data: string }>(
+      `SELECT p.message_id, p.data
+       FROM part p
+       JOIN message m ON p.message_id = m.id
+       WHERE m.session_id = ?
+         AND p.data LIKE '%"type":"tool"%'
+       ORDER BY p.time_created ASC`
+    )
+    .all([sessionId])
+
+  // Group parts by message_id
+  const partsByMessage = new Map<string, SessionToolCall[]>()
+  for (const row of rawParts) {
+    let d: Record<string, unknown>
+    try {
+      d = JSON.parse(row.data) as Record<string, unknown>
+    } catch {
+      continue
+    }
+    if (d.type !== 'tool') continue
+
+    const tool = (d.tool as string | undefined) ?? 'unknown'
+    const callId = (d.callID as string | undefined) ?? ''
+    const state = d.state as Record<string, unknown> | undefined
+    const status = (state?.status as string | undefined) ?? 'unknown'
+    const outputTruncated =
+      (state?.metadata as Record<string, unknown> | undefined)?.truncated === true
+
+    // Build a compact input summary based on tool type
+    const input = (state?.input as Record<string, unknown> | undefined) ?? {}
+    const inputSummary = summariseToolInput(tool, input)
+
+    const list = partsByMessage.get(row.message_id) ?? []
+    list.push({ callId, tool, status, inputSummary, outputTruncated })
+    partsByMessage.set(row.message_id, list)
+  }
+
+  // Build message list
+  const messages: SessionMessage[] = []
+  for (const row of rawMessages) {
+    let d: Record<string, unknown>
+    try {
+      d = JSON.parse(row.data) as Record<string, unknown>
+    } catch {
+      continue
+    }
+
+    const role = d.role as 'assistant' | 'user'
+    if (role !== 'assistant' && role !== 'user') continue
+
+    const tokRaw = d.tokens as Record<string, unknown> | undefined
+    const cacheRaw = tokRaw?.cache as Record<string, unknown> | undefined
+    const timeRaw = d.time as Record<string, unknown> | undefined
+
+    messages.push({
+      messageId: row.id,
+      timeCreated: row.time_created,
+      timeCompleted: (timeRaw?.completed as number | undefined) ?? null,
+      role,
+      modelId: (d.modelID as string | undefined) ?? null,
+      providerId: (d.providerID as string | undefined) ?? null,
+      agent: (d.agent as string | undefined) ?? null,
+      mode: (d.mode as string | undefined) ?? null,
+      tokens: {
+        input: (tokRaw?.input as number | undefined) ?? 0,
+        output: (tokRaw?.output as number | undefined) ?? 0,
+        cacheRead: (cacheRaw?.read as number | undefined) ?? 0,
+        cacheWrite: (cacheRaw?.write as number | undefined) ?? 0,
+        reasoning: (tokRaw?.reasoning as number | undefined) ?? 0,
+        total: (tokRaw?.total as number | undefined) ?? 0,
+      },
+      cost: (d.cost as number | undefined) ?? 0,
+      finish: (d.finish as string | undefined) ?? null,
+      tools: partsByMessage.get(row.id) ?? [],
+    })
+  }
+
+  return {
+    sessionId: session.id,
+    title: session.title,
+    directory: session.directory,
+    timeCreated: session.time_created,
+    timeUpdated: session.time_updated,
+    summaryAdditions: session.summary_additions,
+    summaryDeletions: session.summary_deletions,
+    summaryFiles: session.summary_files,
+    messages,
+  }
+}
+
+/** Build a one-line human-readable summary of a tool's input. */
+function summariseToolInput(tool: string, input: Record<string, unknown>): string | null {
+  // File/path tools
+  if (input.path) return String(input.path)
+  if (input.filePath) return String(input.filePath)
+  if (input.relative_path) return String(input.relative_path)
+  if (input.pattern) return String(input.pattern)
+  // Code tools
+  if (input.command) return String(input.command).slice(0, 80)
+  if (input.description) return String(input.description).slice(0, 80)
+  if (input.query) return String(input.query).slice(0, 80)
+  if (input.url) return String(input.url).slice(0, 80)
+  if (input.symbol) return String(input.symbol)
+  if (input.name_path_pattern) return String(input.name_path_pattern)
+  // Catch-all: first string value
+  for (const v of Object.values(input)) {
+    if (typeof v === 'string' && v.length > 0) return v.slice(0, 80)
+  }
+  return null
+}

@@ -30,6 +30,8 @@ import type {
   GatewayDailySnapshot,
   GatewayModelSpendResult,
   GatewayDailyActivityResult,
+  GatewayDailyMetricsResult,
+  GatewayDailyActivity,
 } from './gateway-types.js'
 import type { GatewayConfig } from '../config/index.js'
 
@@ -44,6 +46,7 @@ const LIVE_CACHE_FILE = join(CACHE_DIR, 'gateway-metrics.json')
 const DAILY_DIR = join(CACHE_DIR, 'gateway-daily')
 const MODEL_SPEND_CACHE_FILE = join(CACHE_DIR, 'gateway-model-spend.json')
 const DAILY_ACTIVITY_CACHE_FILE = join(CACHE_DIR, 'gateway-daily-activity.json')
+const DAILY_METRICS_CACHE_FILE = join(CACHE_DIR, 'gateway-daily-metrics.json')
 
 // ─── Internal types ─────────────────────────────────────────────────────────────
 
@@ -194,6 +197,7 @@ function writeDailySnapshot(data: GatewayMetrics, endpoint: string): void {
   const date = new Date().toLocaleDateString('en-CA') // YYYY-MM-DD local
   const snapshot: GatewayDailySnapshot = {
     date,
+    version: 1,
     fetchedAt: data.fetchedAt,
     totalSpend: data.totalSpend,
     teamSpend: data.teamSpend,
@@ -248,6 +252,170 @@ export function readDailySnapshots(
   }
 
   return snapshots.sort((a, b) => a.date.localeCompare(b.date))
+}
+
+// ─── Daily activity snapshots (/user/daily/activity) ───────────────────────────
+
+/**
+ * Write a version-2 daily snapshot from a /user/daily/activity day record.
+ *
+ * Past days are written once and never overwritten (immutable gateway data).
+ * Today's file is always overwritten — spend accumulates through the day.
+ */
+export function writeDailyActivitySnapshot(day: GatewayDailyActivity, endpoint: string): void {
+  ensureDir(DAILY_DIR)
+
+  const today = new Date().toLocaleDateString('en-CA')
+  const isPastDay = day.date < today
+
+  const filePath = join(DAILY_DIR, `${day.date}.json`)
+
+  // Skip writing if the file already exists for a past day — it's immutable
+  if (isPastDay && existsSync(filePath)) {
+    try {
+      const existing = JSON.parse(readFileSync(filePath, 'utf-8')) as GatewayDailySnapshot
+      // Only skip if it's already a v2 snapshot (v1 had wrong cumulative data)
+      if (existing.version === 2) return
+    } catch {
+      // File is corrupt — fall through and overwrite
+    }
+  }
+
+  const snapshot: GatewayDailySnapshot = {
+    date: day.date,
+    version: 2,
+    fetchedAt: Date.now(),
+    totalSpend: day.totalSpend,
+    totalTokens: day.totalTokens,
+    promptTokens: day.promptTokens,
+    completionTokens: day.completionTokens,
+    cacheReadTokens: day.cacheReadTokens,
+    cacheCreationTokens: day.cacheCreationTokens,
+    totalRequests: day.totalRequests,
+    models: day.models.map(m => ({
+      model: m.model,
+      spend: m.spend,
+      totalTokens: m.totalTokens,
+    })),
+    endpoint,
+  }
+
+  try {
+    writeFileSync(filePath, JSON.stringify(snapshot, null, 2), 'utf-8')
+    try {
+      chmodSync(filePath, 0o600)
+    } catch {
+      /* non-fatal on Windows */
+    }
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/**
+ * Read version-2 daily activity snapshots for the given date range.
+ * Skips version-1 snapshots (they contain wrong cumulative data).
+ * Returns only days that have actual per-day spend data.
+ */
+export function readDailyActivitySnapshots(
+  fromDate: string, // YYYY-MM-DD
+  toDate: string // YYYY-MM-DD
+): GatewayDailySnapshot[] {
+  if (!existsSync(DAILY_DIR)) return []
+
+  let files: string[]
+  try {
+    files = readdirSync(DAILY_DIR)
+  } catch {
+    return []
+  }
+
+  const snapshots: GatewayDailySnapshot[] = []
+  for (const f of files) {
+    if (!f.endsWith('.json')) continue
+    const date = f.replace('.json', '')
+    if (date < fromDate || date > toDate) continue
+
+    try {
+      const raw = readFileSync(join(DAILY_DIR, f), 'utf-8')
+      const snap = JSON.parse(raw) as GatewayDailySnapshot
+      // Only include v2 snapshots — v1 had cumulative billing totals (not daily spend)
+      if (snap.version === 2) snapshots.push(snap)
+    } catch {
+      // skip corrupt file
+    }
+  }
+
+  return snapshots.sort((a, b) => a.date.localeCompare(b.date))
+}
+
+// ─── Daily metrics cache (/self-service-proxy/v1/metrics/ or similar) ─────────
+
+interface DailyMetricsCacheEntry {
+  fetchedAt: number
+  ttlMinutes: number
+  endpointUrl: string
+  startDate: string
+  endDate: string
+  data: GatewayDailyMetricsResult
+}
+
+/**
+ * Returns cached daily metrics for the given date range, or null if stale/missing.
+ * Today's range uses config TTL; past ranges are cached for 24h (immutable).
+ */
+export function readDailyMetricsCache(
+  endpointUrl: string,
+  startDate: string,
+  endDate: string,
+  ttlMinutes: number
+): GatewayDailyMetricsResult | null {
+  if (!existsSync(DAILY_METRICS_CACHE_FILE)) return null
+  try {
+    const entry = JSON.parse(
+      readFileSync(DAILY_METRICS_CACHE_FILE, 'utf-8')
+    ) as DailyMetricsCacheEntry
+    if (entry.endpointUrl !== endpointUrl) return null
+    if (entry.startDate !== startDate || entry.endDate !== endDate) return null
+
+    const today = new Date().toLocaleDateString('en-CA')
+    const isPastRange = endDate < today
+    const ttlMs = isPastRange ? 24 * 60 * 60 * 1000 : ttlMinutes * 60 * 1000
+    if (Date.now() - entry.fetchedAt > ttlMs) return null
+
+    return { ...entry.data, cached: true }
+  } catch {
+    return null
+  }
+}
+
+/** Write daily metrics to cache. */
+export function writeDailyMetricsCache(
+  data: GatewayDailyMetricsResult,
+  endpointUrl: string,
+  startDate: string,
+  endDate: string,
+  ttlMinutes: number
+): void {
+  ensureDir(CACHE_DIR)
+  try {
+    const entry: DailyMetricsCacheEntry = {
+      fetchedAt: data.fetchedAt,
+      ttlMinutes,
+      endpointUrl,
+      startDate,
+      endDate,
+      data,
+    }
+    writeFileSync(DAILY_METRICS_CACHE_FILE, JSON.stringify(entry, null, 2), 'utf-8')
+    try {
+      chmodSync(DAILY_METRICS_CACHE_FILE, 0o600)
+    } catch {
+      /* non-fatal */
+    }
+  } catch {
+    /* non-fatal */
+  }
 }
 
 // ─── Model spend cache (/spend/logs) ─────────────────────────────────────────

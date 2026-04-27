@@ -108,6 +108,11 @@ export interface ModelStats {
    * The model is NOT free — cost is just not tracked per-token by OpenCode.
    */
   billedExternally: boolean
+  /**
+   * True when the cost was estimated locally from opencode.json pricing
+   * rather than read from the database. Indicates the value is approximate.
+   */
+  costEstimated?: boolean
   messageCount: number
   sessionCount: number
   activeDays: number

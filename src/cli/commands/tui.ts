@@ -11,6 +11,7 @@ import {
 import { getConfig } from '../../config/index.js'
 import { renderModelPanels } from '../../viz/chart.js'
 import { getColors } from '../../theme/index.js'
+import { formatCost, formatEstimatedCost } from '../../utils/formatting.js'
 import { fetchGatewayMetrics } from '../../data/gateway.js'
 import { fetchModelSpend, getCurrentBillingPeriod } from '../../data/gateway-litellm.js'
 import { aggregateModelSpend, normalizeModelName } from '../../utils/model-names.js'
@@ -209,16 +210,25 @@ export function registerTuiCommand(program: Command): void {
             }
           }
 
+          const costStr = model.billedExternally
+            ? 'plan'
+            : model.costEstimated
+              ? formatEstimatedCost(model.cost)
+              : formatCost(model.cost)
+
           let content = `${index + 1}. ${color.bold(model.modelId)} ${COLORS.muted(`(${model.providerId})`)} ${COLORS.highlight(percentage + '%')}\n`
           const costLabel = gwSpend ? 'Local $:' : 'Cost:'
           content += `   ${COLORS.label('Tokens:')} ${formatTokens(model.tokens.total)} | `
-          content += `${COLORS.label(costLabel)} $${model.cost.toFixed(2)}${gwCostStr} | `
+          content += `${COLORS.label(costLabel)} ${costStr}${gwCostStr} | `
           content += `${COLORS.label('Msgs:')} ${model.messageCount}\n`
           return content
         }
 
         function renderContent(uiWidth: number, availableRows: number) {
           let content = ''
+
+          // True when any model has estimated cost (affects cost label/format across all tabs)
+          const hasEstimated = modelStats.some(m => m.costEstimated)
 
           if (activeTab === 0) {
             modelsScrollOffset = 0
@@ -231,14 +241,21 @@ export function registerTuiCommand(program: Command): void {
             let kvBlock = `\n${COLORS.label.bold('Overview')}\n\n`
             kvBlock += `${COLORS.label('Total Tokens:')}     ${COLORS.highlight(formatTokens(overview.tokens.total))}\n`
             kvBlock += `${COLORS.label('Total Sessions:')}   ${COLORS.info(overview.sessionCount.toString())}\n`
-            kvBlock += `${COLORS.label(config.gateway ? 'Local Cost:' : 'Total Cost:')}       ${COLORS.warning('$' + overview.cost.toFixed(4))}\n`
+
+            // True when any model has estimated cost (affects cost label/format across all tabs)
+            const hasEstimated = modelStats.some(m => m.costEstimated)
+            const overviewCostStr = hasEstimated
+              ? formatEstimatedCost(overview.cost)
+              : formatCost(overview.cost)
+
+            kvBlock += `${COLORS.label(config.gateway ? 'Local Cost:' : 'Total Cost:')}       ${COLORS.warning(overviewCostStr)}\n`
             if (gatewayMetrics) {
               const diff = overview.cost - gatewayMetrics.totalSpend
               const diffStr =
                 diff >= 0
-                  ? COLORS.muted(`  (+$${diff.toFixed(2)} vs gateway)`)
-                  : COLORS.muted(`  (-$${Math.abs(diff).toFixed(2)} vs gateway)`)
-              kvBlock += `${COLORS.label('Gateway Cost:')}     ${COLORS.info('$' + gatewayMetrics.totalSpend.toFixed(4))}${diffStr}\n`
+                  ? COLORS.muted(`  (+${formatCost(diff)} vs gateway)`)
+                  : COLORS.muted(`  (-${formatCost(Math.abs(diff))} vs gateway)`)
+              kvBlock += `${COLORS.label('Gateway Cost:')}     ${COLORS.info(formatCost(gatewayMetrics.totalSpend))}${diffStr}\n`
             }
             kvBlock += `${COLORS.label('Active Days:')}      ${overview.activedays}/${overview.totalDays}\n`
             kvBlock += `${COLORS.label('Current Streak:')}   ${overview.currentStreak} days\n\n`
@@ -258,11 +275,12 @@ export function registerTuiCommand(program: Command): void {
             let topProvidersBlock = ''
             if (providerStats.length > 0) {
               const topProviders = providerStats.slice(0, 3).map(p => {
+                const pCostStr = hasEstimated ? formatEstimatedCost(p.cost) : formatCost(p.cost)
                 let detail: string
                 if (gatewayMetrics && p.cost > 0 && p.cost >= overview.cost * 0.5) {
-                  detail = `(local $${p.cost.toFixed(2)} | gw $${gatewayMetrics.totalSpend.toFixed(2)})`
+                  detail = `(local ${pCostStr} | gw ${formatCost(gatewayMetrics.totalSpend)})`
                 } else {
-                  detail = `($${p.cost.toFixed(2)})`
+                  detail = `(${pCostStr})`
                 }
                 return { name: p.providerId, value: `${(p.percentage * 100).toFixed(1)}%`, detail }
               })
@@ -293,10 +311,10 @@ export function registerTuiCommand(program: Command): void {
             if (config.gateway) {
               if (gatewayMetrics) {
                 const gw = gatewayMetrics
-                const spendStr = `$${gw.totalSpend.toFixed(2)}`
+                const spendStr = formatCost(gw.totalSpend)
                 const budgetStr =
                   gw.budgetLimit !== null
-                    ? ` / $${gw.budgetLimit.toFixed(2)}  (${((gw.totalSpend / gw.budgetLimit) * 100).toFixed(1)}%)`
+                    ? ` / ${formatCost(gw.budgetLimit)}  (${((gw.totalSpend / gw.budgetLimit) * 100).toFixed(1)}%)`
                     : ''
                 const cacheIndicator = gw.cached ? COLORS.muted(' cached') : COLORS.muted(' live')
                 gatewayBlock += `\n${COLORS.label.bold('Gateway Spend:')}\n`
@@ -305,15 +323,15 @@ export function registerTuiCommand(program: Command): void {
                   const teamStr = gw.teamName ? ` (${gw.teamName})` : ''
                   const teamBudget =
                     gw.teamBudgetLimit !== null
-                      ? ` / $${gw.teamBudgetLimit.toFixed(2)}  (${((gw.teamSpend / gw.teamBudgetLimit) * 100).toFixed(1)}%)`
+                      ? ` / ${formatCost(gw.teamBudgetLimit)}  (${((gw.teamSpend / gw.teamBudgetLimit) * 100).toFixed(1)}%)`
                       : ''
-                  gatewayBlock += `  ${COLORS.muted('Team:')} $${gw.teamSpend.toFixed(2)}${COLORS.muted(teamBudget + teamStr)}\n`
+                  gatewayBlock += `  ${COLORS.muted('Team:')} ${formatCost(gw.teamSpend)}${COLORS.muted(teamBudget + teamStr)}\n`
                 }
                 const diff = overview.cost - gw.totalSpend
                 const diffStr =
                   diff >= 0
-                    ? `+$${diff.toFixed(2)} local vs gateway`
-                    : `-$${Math.abs(diff).toFixed(2)} local vs gateway`
+                    ? `+${formatCost(diff)} local vs gateway`
+                    : `-${formatCost(Math.abs(diff))} local vs gateway`
                 gatewayBlock += `  ${COLORS.muted(diffStr)}\n`
               } else {
                 gatewayBlock = `\n${COLORS.muted('Gateway: fetching…')}\n`
@@ -441,9 +459,10 @@ export function registerTuiCommand(program: Command): void {
                   p.providerId.length > nameWidth
                     ? p.providerId.slice(0, nameWidth - 1) + '…'
                     : p.providerId.padEnd(nameWidth)
-                let costDisplay = COLORS.warning(`$${p.cost.toFixed(2)}`)
+                const pCostStr2 = hasEstimated ? formatEstimatedCost(p.cost) : formatCost(p.cost)
+                let costDisplay = COLORS.warning(pCostStr2)
                 if (gatewayMetrics && p.cost > 0 && p.cost >= overview.cost * 0.5) {
-                  costDisplay += COLORS.muted(` gw:$${gatewayMetrics.totalSpend.toFixed(2)}`)
+                  costDisplay += COLORS.muted(` gw:${formatCost(gatewayMetrics.totalSpend)}`)
                 }
                 content += `${num} ${COLORS.value(name)} ${COLORS.info(bar)} ${COLORS.highlight(formatTokens(p.tokens.total))} ${COLORS.muted(`(${percentage}%)`)} ${costDisplay}\n`
               })
@@ -468,7 +487,7 @@ export function registerTuiCommand(program: Command): void {
                   .substring(0, titleCol)
                 const date = new Date(s.timeCreated).toLocaleDateString('en-CA')
                 const tok = formatTokens(s.tokens.total).padStart(6)
-                const cost = `$${s.cost.toFixed(2)}`.padStart(6)
+                const cost = formatCost(s.cost).padStart(6)
                 const dur = s.durationMs != null ? formatDur(s.durationMs).padStart(6) : '     -'
                 const model = (s.models[0] ?? '').substring(0, 18)
                 const num = COLORS.highlight(`${(i + 1).toString().padStart(2)}.`)

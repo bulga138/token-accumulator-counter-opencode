@@ -19,6 +19,14 @@ export function formatCost(usd: number): string {
 }
 
 /**
+ * Format an estimated cost with a tilde prefix to indicate approximation.
+ * e.g. 14.37 → "~$14.37"
+ */
+export function formatEstimatedCost(usd: number): string {
+  return `~${formatCost(usd)}`
+}
+
+/**
  * Format a percentage: 0.712 → "71.2%"
  */
 export function formatPercent(frac: number): string {

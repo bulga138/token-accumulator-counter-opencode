@@ -9,7 +9,7 @@ import { formatModelsCsv } from '../../format/csv.js'
 import { formatModelsMarkdown } from '../../format/markdown.js'
 import { addFilterFlags, buildRangeLabel } from '../filters.js'
 import { getConfig } from '../../config/index.js'
-import { formatCost, formatTokens } from '../../utils/formatting.js'
+import { formatCost, formatEstimatedCost, formatTokens } from '../../utils/formatting.js'
 import { getColors } from '../../theme/index.js'
 import type { ModelStats, SortField } from '../../data/types.js'
 import { fetchModelSpend, getCurrentBillingPeriod } from '../../data/gateway-litellm.js'
@@ -171,11 +171,12 @@ function formatModelsWithGateway(
         : useColor
           ? dim(gwStr.padStart(GW_W))
           : gwStr.padStart(GW_W)
+    const localCostStr = m.costEstimated ? formatEstimatedCost(m.cost) : formatCost(m.cost)
     lines.push(
       '  ' +
         (useColor ? COLORS.value(modelDisplay) : modelDisplay) +
         formatTokens(m.tokens.total).padStart(TOKENS_W) +
-        formatCost(m.cost).padStart(LOCAL_W) +
+        localCostStr.padStart(LOCAL_W) +
         gwCell +
         pct.padStart(SHARE_W)
     )

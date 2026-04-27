@@ -101,26 +101,103 @@ export interface GatewayDailyActivityResult {
 
 /**
  * Which LiteLLM standard endpoints are available on this gateway.
+ * Discovered by probing each path and checking for non-404/405 responses.
  */
 export interface LiteLLMEndpointAvailability {
-  spendLogs: boolean
-  dailyActivity: boolean
-  modelInfo: boolean
+  // Spend / billing endpoints
+  spendLogs: boolean // GET /spend/logs?start_date=&end_date=
+  dailyActivity: boolean // GET /user/daily/activity?start_date=&end_date=
+  spendTags: boolean // GET /spend/tags
+  // Model endpoints
+  modelInfo: boolean // GET /model/info
+  models: boolean // GET /models  (OpenAI-compatible model list)
+  // Key / user endpoints
+  keyInfo: boolean // GET /key/info  (per-key spend + budget)
+  userInfo: boolean // GET /user/info  (per-user spend + budget)
+  // Global / admin endpoints (may be 401 for non-admins)
+  globalSpendModels: boolean // GET /global/spend/models
+  // Health
+  healthReadiness: boolean // GET /health/readiness
 }
 
 /**
- * A permanent daily snapshot of gateway spend written at the end of each day.
- * Past days' costs are immutable so these are kept indefinitely.
+ * Per-key metadata from the LiteLLM /key/info endpoint.
+ * More accurate than /user/info for per-key spend tracking.
+ */
+export interface GatewayKeyInfo {
+  /** Hashed key identifier. */
+  keyHash: string
+  /** Obfuscated key name (e.g. "sk-...lRhg"). */
+  keyName: string | null
+  /** Total spend billed to this key in USD. */
+  spend: number
+  /** Max budget for this key in USD, or null if unlimited. */
+  maxBudget: number | null
+  /** When this budget resets, or null. */
+  budgetResetAt: string | null
+  /** Budget period string (e.g. "1mo"), or null. */
+  budgetDuration: string | null
+  /** User ID that owns this key. */
+  userId: string | null
+  /** Team ID this key belongs to. */
+  teamId: string | null
+  /** ISO timestamp of last API call. */
+  lastActive: string | null
+}
+
+/**
+ * Result from a date-range metrics endpoint (e.g. /self-service-proxy/v1/metrics/).
+ * Contains today-scoped (or any date-range-scoped) spend and per-model breakdown.
+ */
+export interface GatewayDailyMetricsResult {
+  /** Total spend for the queried date range in USD. */
+  totalSpend: number
+  /** Per-model spend for the queried date range. Raw model names including provider prefix. */
+  modelSpend: GatewayModelSpend[]
+  fetchedAt: number
+  cached: boolean
+  endpoint: string
+}
+
+/**
+ * A permanent daily snapshot of actual per-day gateway spend.
+ *
+ * Written from /user/daily/activity responses. Past days are immutable so
+ * each file is written once and kept forever. Today's file is overwritten
+ * on each fetch until the day ends.
+ *
+ * Stored as gateway-daily/YYYY-MM-DD.json.
+ * Version 2 adds full token breakdown and per-model data.
  */
 export interface GatewayDailySnapshot {
   /** YYYY-MM-DD */
   date: string
+  /** Schema version — 1 = legacy cumulative billing total, 2 = actual daily spend from /user/daily/activity */
+  version: 1 | 2
   /** Unix epoch ms when this snapshot was written. */
   fetchedAt: number
-  /** Total spend in USD at the time of the last fetch on this day. */
+  /** Actual spend for this specific day in USD (version 2) or cumulative billing total (version 1). */
   totalSpend: number
-  /** Team spend in USD at the time of the last fetch, or null. */
-  teamSpend: number | null
+  /** Team spend in USD (version 1 only, cumulative). Omitted in version 2. */
+  teamSpend?: number | null
+  /** Total tokens processed this day (version 2 only). */
+  totalTokens?: number
+  /** Prompt/input tokens (version 2 only). */
+  promptTokens?: number
+  /** Completion/output tokens (version 2 only). */
+  completionTokens?: number
+  /** Cache read tokens (version 2 only). */
+  cacheReadTokens?: number
+  /** Cache creation/write tokens (version 2 only). */
+  cacheCreationTokens?: number
+  /** Total API requests (version 2 only). */
+  totalRequests?: number
+  /** Per-model spend breakdown for this day (version 2 only). */
+  models?: Array<{
+    model: string
+    spend: number
+    totalTokens: number
+  }>
   /** The gateway endpoint used. */
   endpoint: string
 }

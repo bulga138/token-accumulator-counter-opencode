@@ -1,6 +1,12 @@
 import chalk from 'chalk'
 import type { ModelStats } from '../data/types.js'
-import { formatTokens, formatCost, formatPercent, formatTps } from '../utils/formatting.js'
+import {
+  formatTokens,
+  formatCost,
+  formatEstimatedCost,
+  formatPercent,
+  formatTps,
+} from '../utils/formatting.js'
 
 const MODEL_COLORS = [chalk.cyan, chalk.yellow, chalk.magenta, chalk.green, chalk.red, chalk.blue]
 
@@ -38,7 +44,11 @@ function renderCard(model: ModelStats, index: number, useColor: boolean): string
   const pct = formatPercent(model.percentage)
   const header = `${bullet} ${model.modelId} (${pct})`
   const tokens = `  In: ${formatTokens(model.tokens.input)} · Out: ${formatTokens(model.tokens.output)}`
-  const costStr = model.billedExternally ? 'billed via plan' : formatCost(model.cost)
+  const costStr = model.billedExternally
+    ? 'billed via plan'
+    : model.costEstimated
+      ? formatEstimatedCost(model.cost)
+      : formatCost(model.cost)
   const cost = `  Cost: ${costStr}`
   const via = `  via ${model.providerId}`
 

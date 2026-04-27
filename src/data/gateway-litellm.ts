@@ -21,13 +21,20 @@ import type {
   GatewayDailyActivity,
   GatewayDailyModelMetrics,
   LiteLLMEndpointAvailability,
+  GatewayKeyInfo,
+  GatewayModelSpend,
+  GatewayDailyMetricsResult,
 } from './gateway-types.js'
-import { resolveEnvVar } from '../utils/jsonpath.js'
+import { resolveEnvVar, resolveJsonPath } from '../utils/jsonpath.js'
 import {
   readModelSpendCache,
   writeModelSpendCache,
   readDailyActivityCache,
   writeDailyActivityCache,
+  readDailyMetricsCache,
+  writeDailyMetricsCache,
+  writeDailyActivitySnapshot,
+  readDailyActivitySnapshots,
 } from './gateway-cache.js'
 
 // ─── Base URL derivation ───────────────────────────────────────────────────────
@@ -71,22 +78,50 @@ export async function discoverLiteLLMEndpoints(
       const r = await fetch(`${baseUrl}${path}`, {
         method: 'GET',
         headers,
-        signal: AbortSignal.timeout(5000),
+        signal: AbortSignal.timeout(6000),
       })
-      // 200, 422 (missing params), or 401 (auth issue) all mean the endpoint exists
+      // 200 = available, 422 = exists but missing params, 400 = exists but bad request
+      // 401 = exists but insufficient permissions, 403 = forbidden (admin-only)
+      // 404/405 = genuinely not there
       return r.status !== 404 && r.status !== 405
     } catch {
       return false
     }
   }
 
-  const [spendLogs, dailyActivity, modelInfo] = await Promise.all([
+  const [
+    spendLogs,
+    dailyActivity,
+    spendTags,
+    modelInfo,
+    models,
+    keyInfo,
+    userInfo,
+    globalSpendModels,
+    healthReadiness,
+  ] = await Promise.all([
     probe('/spend/logs?start_date=2020-01-01&end_date=2020-01-02'),
     probe('/user/daily/activity?start_date=2020-01-01&end_date=2020-01-02'),
+    probe('/spend/tags'),
     probe('/model/info'),
+    probe('/models'),
+    probe('/key/info'),
+    probe('/user/info'),
+    probe('/global/spend/models'),
+    probe('/health/readiness'),
   ])
 
-  const result: LiteLLMEndpointAvailability = { spendLogs, dailyActivity, modelInfo }
+  const result: LiteLLMEndpointAvailability = {
+    spendLogs,
+    dailyActivity,
+    spendTags,
+    modelInfo,
+    models,
+    keyInfo,
+    userInfo,
+    globalSpendModels,
+    healthReadiness,
+  }
   _discoveryCache.set(baseUrl, result)
   return result
 }
@@ -273,10 +308,323 @@ export async function fetchDailyActivity(
     }
 
     writeDailyActivityCache(result, config, startDate, endDate)
+
+    // Persist each day as an immutable per-day snapshot.
+    // Past days are written once; today is overwritten on each fetch.
+    // Run async so it doesn't block the main response.
+    setImmediate(() => {
+      for (const day of result.days) {
+        writeDailyActivitySnapshot(day, url)
+      }
+    })
+
     return result
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.warn(`[taco] Gateway /user/daily/activity fetch failed: ${msg}`)
+    return null
+  }
+}
+
+// ─── Daily activity snapshot helpers ──────────────────────────────────────────
+
+/**
+ * Read persisted per-day gateway spend from disk snapshots.
+ * Combines snapshot data with any live-fetched days to give the fullest
+ * possible date range without hitting the network.
+ *
+ * Returns a map of YYYY-MM-DD → daily spend in USD.
+ */
+export function readGatewayDailySpend(fromDate: string, toDate: string): Map<string, number> {
+  const snapshots = readDailyActivitySnapshots(fromDate, toDate)
+  const result = new Map<string, number>()
+  for (const snap of snapshots) {
+    result.set(snap.date, snap.totalSpend)
+  }
+  return result
+}
+
+/**
+ * Read persisted per-day gateway snapshots and return full GatewayDailyActivity
+ * objects reconstructed from disk. Useful for filling gaps in the live fetch.
+ */
+export function readGatewayDailyActivity(fromDate: string, toDate: string): GatewayDailyActivity[] {
+  const snapshots = readDailyActivitySnapshots(fromDate, toDate)
+  return snapshots.map(snap => ({
+    date: snap.date,
+    totalSpend: snap.totalSpend,
+    totalRequests: snap.totalRequests ?? 0,
+    promptTokens: snap.promptTokens ?? 0,
+    completionTokens: snap.completionTokens ?? 0,
+    cacheReadTokens: snap.cacheReadTokens ?? 0,
+    cacheCreationTokens: snap.cacheCreationTokens ?? 0,
+    totalTokens: snap.totalTokens ?? 0,
+    models: (snap.models ?? []).map(m => ({
+      model: m.model,
+      spend: m.spend,
+      promptTokens: 0,
+      completionTokens: 0,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      totalTokens: m.totalTokens,
+      apiRequests: 0,
+    })),
+  }))
+}
+
+// ─── /key/info ────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch per-key spend and budget from /key/info.
+ *
+ * This is the most accurate source for the spend attributed to the configured
+ * API key. More precise than /user/info when a user has multiple keys.
+ * Returns null gracefully if the endpoint is unavailable.
+ */
+export async function fetchKeyInfo(config: GatewayConfig): Promise<GatewayKeyInfo | null> {
+  const baseUrl = deriveBaseUrl(config.endpoint)
+  const url = `${baseUrl}/key/info`
+  const headers = buildAuthHeaders(config.auth)
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!response.ok) return null
+
+    const raw = (await response.json()) as {
+      key?: string
+      info?: {
+        key_name?: string | null
+        spend?: number
+        max_budget?: number | null
+        budget_reset_at?: string | null
+        budget_duration?: string | null
+        user_id?: string | null
+        team_id?: string | null
+        last_active?: string | null
+      }
+    }
+
+    if (!raw.info) return null
+    const info = raw.info
+
+    return {
+      keyHash: raw.key ?? '',
+      keyName: info.key_name ?? null,
+      spend: typeof info.spend === 'number' ? info.spend : 0,
+      maxBudget: typeof info.max_budget === 'number' ? info.max_budget : null,
+      budgetResetAt: info.budget_reset_at ?? null,
+      budgetDuration: info.budget_duration ?? null,
+      userId: info.user_id ?? null,
+      teamId: info.team_id ?? null,
+      lastActive: info.last_active ?? null,
+    }
+  } catch {
+    return null
+  }
+}
+
+// ─── /models ──────────────────────────────────────────────────────────────────
+
+/**
+ * Fetch the list of available model IDs from the OpenAI-compatible /models endpoint.
+ * Returns a sorted array of model ID strings, or null if unavailable.
+ */
+export async function fetchAvailableModels(config: GatewayConfig): Promise<string[] | null> {
+  const baseUrl = deriveBaseUrl(config.endpoint)
+  const url = `${baseUrl}/models`
+  const headers = buildAuthHeaders(config.auth)
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!response.ok) return null
+
+    const raw = (await response.json()) as { data?: Array<{ id?: string }> }
+    if (!raw.data || !Array.isArray(raw.data)) return null
+
+    return raw.data
+      .map(m => m.id ?? '')
+      .filter(Boolean)
+      .sort()
+  } catch {
+    return null
+  }
+}
+
+// ─── /global/spend/models ─────────────────────────────────────────────────────
+
+/**
+ * Fetch org-wide per-model spend from /global/spend/models (admin endpoint).
+ * Returns null if unavailable or not authorized (non-admin keys get 401).
+ */
+export async function fetchGlobalSpendModels(
+  config: GatewayConfig
+): Promise<GatewayModelSpend[] | null> {
+  const baseUrl = deriveBaseUrl(config.endpoint)
+  const url = `${baseUrl}/global/spend/models`
+  const headers = buildAuthHeaders(config.auth)
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!response.ok) return null
+
+    const raw = (await response.json()) as Array<{
+      model?: string
+      total_spend?: number
+      total_tokens?: number
+    }>
+    if (!Array.isArray(raw)) return null
+
+    return raw
+      .filter(r => typeof r.model === 'string' && typeof r.total_spend === 'number')
+      .map(r => ({ model: r.model!, spend: r.total_spend! }))
+      .sort((a, b) => b.spend - a.spend)
+  } catch {
+    return null
+  }
+}
+
+// ─── /spend/tags ──────────────────────────────────────────────────────────────
+
+/**
+ * Fetch spend broken down by request tag (user-agent, custom tags) from /spend/tags.
+ * Returns null if unavailable.
+ */
+export interface GatewaySpendTag {
+  tag: string
+  logCount: number
+  totalSpend: number
+}
+
+export async function fetchSpendTags(config: GatewayConfig): Promise<GatewaySpendTag[] | null> {
+  const baseUrl = deriveBaseUrl(config.endpoint)
+  const url = `${baseUrl}/spend/tags`
+  const headers = buildAuthHeaders(config.auth)
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(8000),
+    })
+    if (!response.ok) return null
+
+    const raw = (await response.json()) as Array<{
+      individual_request_tag?: string
+      log_count?: number
+      total_spend?: number
+    }>
+    if (!Array.isArray(raw)) return null
+
+    return raw
+      .filter(r => typeof r.individual_request_tag === 'string')
+      .map(r => ({
+        tag: r.individual_request_tag!,
+        logCount: r.log_count ?? 0,
+        totalSpend: r.total_spend ?? 0,
+      }))
+      .sort((a, b) => b.totalSpend - a.totalSpend)
+  } catch {
+    return null
+  }
+}
+
+// ─── Date-range metrics endpoint ──────────────────────────────────────────────
+
+/**
+ * Fetch spend for a specific date range from a custom metrics endpoint
+ * (e.g. /self-service-proxy/v1/metrics/?start_date=...&end_date=...).
+ *
+ * Requires `config.dailyMetricsEndpoint` to be configured.
+ * Uses the same auth as the primary gateway endpoint.
+ * Caches results with TTL = config.cacheTtlMinutes (default 5 min for today).
+ */
+export async function fetchDailyMetrics(
+  config: GatewayConfig,
+  startDate: string,
+  endDate: string
+): Promise<GatewayDailyMetricsResult | null> {
+  const daily = config.dailyMetricsEndpoint
+  if (!daily?.url) return null
+
+  const ttlMinutes = config.cacheTtlMinutes ?? 5
+
+  // Check cache
+  const cached = readDailyMetricsCache(daily.url, startDate, endDate, ttlMinutes)
+  if (cached) return cached
+
+  const url = `${daily.url.replace(/\/$/, '')}?start_date=${startDate}&end_date=${endDate}`
+  const headers = buildAuthHeaders(config.auth)
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: AbortSignal.timeout(10000),
+    })
+
+    if (!response.ok) {
+      if (response.status !== 404) {
+        console.warn(`[taco] Daily metrics endpoint returned ${response.status}`)
+      }
+      return null
+    }
+
+    const raw: unknown = await response.json()
+
+    // Extract total spend via JSONPath
+    const totalSpendRaw = resolveJsonPath(raw, daily.mappings.totalSpend)
+    const totalSpend = typeof totalSpendRaw === 'number' ? totalSpendRaw : Number(totalSpendRaw)
+    if (!isFinite(totalSpend)) {
+      console.warn(
+        `[taco] Daily metrics: could not resolve totalSpend at "${daily.mappings.totalSpend}"`
+      )
+      return null
+    }
+
+    // Extract model spend array (optional)
+    const modelSpend: GatewayModelSpend[] = []
+    if (daily.mappings.modelSpend) {
+      const rawArr = resolveJsonPath(raw, daily.mappings.modelSpend)
+      if (Array.isArray(rawArr)) {
+        const modelField = daily.mappings.modelSpendFields?.model ?? 'model'
+        const spendField = daily.mappings.modelSpendFields?.spend ?? 'spend'
+        for (const item of rawArr) {
+          if (item && typeof item === 'object') {
+            const model = (item as Record<string, unknown>)[modelField]
+            const spend = (item as Record<string, unknown>)[spendField]
+            if (typeof model === 'string' && typeof spend === 'number') {
+              modelSpend.push({ model, spend })
+            }
+          }
+        }
+      }
+    }
+
+    const result: GatewayDailyMetricsResult = {
+      totalSpend,
+      modelSpend,
+      fetchedAt: Date.now(),
+      cached: false,
+      endpoint: url,
+    }
+
+    writeDailyMetricsCache(result, daily.url, startDate, endDate, ttlMinutes)
+    return result
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[taco] Daily metrics fetch failed: ${msg}`)
     return null
   }
 }

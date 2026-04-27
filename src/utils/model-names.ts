@@ -16,18 +16,34 @@
  */
 
 // ─── Provider prefix stripping ────────────────────────────────────────────────
+//
+// Order matters: longest/most-specific prefixes must come before shorter ones
+// so the first match always strips the right amount.
 
 const PROVIDER_PREFIXES = [
+  // Bedrock regional variants (longest first)
   'bedrock/global.anthropic.',
   'bedrock/eu.anthropic.',
   'bedrock/us.anthropic.',
   'bedrock/',
+  // Azure AI model marketplace
   'azure_ai/',
+  // Azure OpenAI (e.g. azure/gpt-5.2-codex)
+  'azure/',
+  // Vertex AI nested org namespaces (must come before bare vertex_ai/)
+  'vertex_ai/qwen/',
+  'vertex_ai/zai-org/',
+  'vertex_ai/moonshotai/',
+  // Vertex AI bare prefix
   'vertex_ai/',
+  // Bare provider dot-prefixes (e.g. anthropic.claude-*, qwen.qwen3-*, ...)
   'global.anthropic.',
   'eu.anthropic.',
   'us.anthropic.',
   'anthropic.',
+  'qwen.',
+  'zai.',
+  'minimax.',
 ]
 
 // ─── Version/suffix patterns ──────────────────────────────────────────────────
@@ -41,11 +57,18 @@ const VERSION_SUFFIX = /([-@](?:v\d+(?::\d+)?|\d{8}(?:-v\d+(?::\d+)?)?))+$/
  * Normalize a gateway or local model name to a canonical form.
  *
  * Examples:
- *   "vertex_ai/claude-opus-4-6"            → "claude-opus-4-6"
- *   "bedrock/global.anthropic.claude-opus-4-6-v1" → "claude-opus-4-6"
- *   "azure_ai/Claude-Opus-4.6"             → "claude-opus-4-6"
- *   "claude-opus-4-6*"                     → "claude-opus-4-6"
- *   "claude-sonnet-4.6"                    → "claude-sonnet-4-6"
+ *   "vertex_ai/claude-opus-4-6"                        → "claude-opus-4-6"
+ *   "bedrock/global.anthropic.claude-opus-4-6-v1"      → "claude-opus-4-6"
+ *   "azure_ai/Claude-Opus-4.6"                         → "claude-opus-4-6"
+ *   "azure/gpt-5.2-codex"                              → "gpt-5-2-codex"
+ *   "vertex_ai/qwen/qwen3-next-80b-a3b-thinking-maas"  → "qwen3-next-80b-a3b-thinking-maas"
+ *   "vertex_ai/zai-org/glm-4.7-maas"                  → "glm-4-7-maas"
+ *   "vertex_ai/moonshotai/kimi-k2-thinking-maas"       → "kimi-k2-thinking-maas"
+ *   "qwen.qwen3-vl-235b-a22b"                          → "qwen3-vl-235b-a22b"
+ *   "zai.glm-4.7-flash"                                → "glm-4-7-flash"
+ *   "minimax.minimax-m2.5"                             → "minimax-m2-5"
+ *   "claude-opus-4-6*"                                 → "claude-opus-4-6"
+ *   "claude-sonnet-4.6"                                → "claude-sonnet-4-6"
  */
 export function normalizeModelName(name: string): string {
   let n = name.toLowerCase()

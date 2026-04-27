@@ -64,6 +64,8 @@ export function formatModelsCsv(models: ModelStats[]): string {
       tokens_cache_write: m.tokens.cacheWrite,
       tokens_reasoning: m.tokens.reasoning,
       cost_usd: m.cost,
+      cost_estimated: m.costEstimated ?? false,
+      billed_externally: m.billedExternally,
       message_count: m.messageCount,
       session_count: m.sessionCount,
       active_days: m.activeDays,

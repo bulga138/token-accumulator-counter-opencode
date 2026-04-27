@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import type { Database } from './fixtures/create-fixture-db.js'
 import { createFixtureDbAsync } from './fixtures/create-fixture-db.js'
 import { loadUsageEvents, loadSessions } from '../src/data/queries.js'
@@ -14,6 +14,39 @@ import {
   computeHeatmap,
 } from '../src/aggregator/index.js'
 import { toDateString } from '../src/utils/dates.js'
+import { writeFileSync, mkdirSync, rmSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir, homedir } from 'node:os'
+import { resetPricingCache, _setConfigPathForTesting } from '../src/data/opencode-pricing.js'
+import type { UsageEvent } from '../src/data/types.js'
+
+// ─── Pricing test helpers ─────────────────────────────────────────────────────
+
+const PRICING_TEMP_DIR = join(tmpdir(), `taco-aggregator-pricing-test-${process.pid}`)
+const PRICING_TEMP_CONFIG = join(PRICING_TEMP_DIR, 'opencode.json')
+
+function setPricingConfig(
+  models: Record<
+    string,
+    { input: number; output: number; cache_read?: number; cache_write?: number }
+  >
+): void {
+  mkdirSync(PRICING_TEMP_DIR, { recursive: true })
+  // The pricing loader expects models[name].cost.{input,output,...}
+  const wrapped: Record<string, { cost: unknown }> = {}
+  for (const [name, rates] of Object.entries(models)) {
+    wrapped[name] = { cost: rates }
+  }
+  writeFileSync(PRICING_TEMP_CONFIG, JSON.stringify({ provider: { litellm: { models: wrapped } } }))
+  _setConfigPathForTesting(PRICING_TEMP_CONFIG)
+}
+
+function clearPricingConfig(): void {
+  if (existsSync(PRICING_TEMP_CONFIG)) rmSync(PRICING_TEMP_CONFIG)
+  // Restore to the real opencode.json path
+  _setConfigPathForTesting(join(homedir(), '.config', 'opencode', 'opencode.json'))
+  resetPricingCache()
+}
 
 let db: Database
 
@@ -234,6 +267,115 @@ describe('computeTrends', () => {
     const events = loadUsageEvents(db)
     expect(computeTrends(events, 'day', 3)).toHaveLength(3)
     expect(computeTrends(events, 'month', 2)).toHaveLength(2)
+  })
+})
+
+// ─── Cost estimation via opencode.json pricing ────────────────────────────────
+
+describe('computeModelStats — cost estimation', () => {
+  // Use a model name whose normalised form matches what we put in the pricing file
+  const MODEL_ID = 'azure/gpt-5.2-codex' // normalises to gpt-5-2-codex
+  const RATES = { input: 0.00000175, output: 0.000014 }
+
+  const baseEvent: UsageEvent = {
+    messageId: 'msg_est_001',
+    sessionId: 'ses_est',
+    sessionTitle: null,
+    sessionDirectory: null,
+    sessionParentId: null,
+    projectId: null,
+    timeCreated: Date.now() - 1000,
+    timeCompleted: Date.now(),
+    modelId: MODEL_ID,
+    providerId: 'litellm',
+    agent: 'build',
+    tokens: { input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 1200 },
+    cost: 0,
+    finish: 'stop',
+  }
+
+  afterEach(() => {
+    clearPricingConfig()
+  })
+
+  it('leaves cost unchanged when DB already recorded a non-zero cost', () => {
+    // Even with pricing available, a non-zero DB cost must not be touched.
+    setPricingConfig({ [MODEL_ID]: RATES })
+
+    const event: UsageEvent = { ...baseEvent, cost: 0.42 }
+    const stats = computeModelStats([event])
+    const model = stats[0]!
+    expect(model.cost).toBe(0.42)
+    expect(model.costEstimated).toBeFalsy()
+    expect(model.billedExternally).toBe(false)
+  })
+
+  it('estimates cost when DB cost is 0 and pricing is available', () => {
+    setPricingConfig({ [MODEL_ID]: RATES })
+
+    const stats = computeModelStats([baseEvent])
+    const model = stats.find(s => s.modelId === MODEL_ID)!
+    expect(model).toBeDefined()
+    // 1000 * 0.00000175 + 200 * 0.000014 = 0.00175 + 0.0028 = 0.00455
+    expect(model.cost).toBeCloseTo(0.00455, 5)
+    expect(model.costEstimated).toBe(true)
+    expect(model.billedExternally).toBe(false)
+  })
+
+  it('leaves billedExternally=true when cost is 0 and no pricing entry exists', () => {
+    // Empty config — no pricing for the model
+    setPricingConfig({})
+    // But the file must actually exist and parse with at least one valid model
+    // for the pricing map to be non-null. To simulate "map exists but no match",
+    // we add a different model's pricing.
+    setPricingConfig({ 'anthropic.claude-sonnet-4-6': { input: 0.000003, output: 0.000015 } })
+
+    const event: UsageEvent = { ...baseEvent, modelId: 'unknown-model-xyz' }
+    const stats = computeModelStats([event])
+    const model = stats.find(s => s.modelId === 'unknown-model-xyz')!
+    expect(model.cost).toBe(0)
+    expect(model.billedExternally).toBe(true)
+    expect(model.costEstimated).toBeFalsy()
+  })
+
+  it('does not estimate when all events have cost: 0 and tokens.total: 0', () => {
+    // Pricing is available but estimation guard (total > 0) prevents it
+    setPricingConfig({ [MODEL_ID]: RATES })
+
+    const event: UsageEvent = {
+      ...baseEvent,
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, total: 0 },
+      cost: 0,
+    }
+    const stats = computeModelStats([event])
+    const model = stats[0]!
+    expect(model.cost).toBe(0)
+    expect(model.costEstimated).toBeFalsy()
+  })
+
+  it('handles cache tokens in cost estimation', () => {
+    setPricingConfig({
+      [MODEL_ID]: { ...RATES, cache_read: 1.75e-7, cache_write: 0 },
+    })
+
+    const event: UsageEvent = {
+      ...baseEvent,
+      tokens: {
+        input: 1000,
+        output: 200,
+        cacheRead: 4000,
+        cacheWrite: 0,
+        reasoning: 0,
+        total: 5200,
+      },
+      cost: 0,
+    }
+    const stats = computeModelStats([event])
+    const model = stats[0]!
+    // 1000*0.00000175 + 200*0.000014 + 4000*1.75e-7
+    // = 0.00175 + 0.0028 + 0.0007 = 0.00525
+    expect(model.cost).toBeCloseTo(0.00525, 5)
+    expect(model.costEstimated).toBe(true)
   })
 })
 

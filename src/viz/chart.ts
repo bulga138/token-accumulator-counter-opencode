@@ -3,7 +3,13 @@ import chalk from 'chalk'
 import dayjs from 'dayjs'
 import type { DailySeries, ModelStats } from '../data/types.js'
 
-import { formatTokens, formatCost, formatPercent, formatTps } from '../utils/formatting.js'
+import {
+  formatTokens,
+  formatCost,
+  formatEstimatedCost,
+  formatPercent,
+  formatTps,
+} from '../utils/formatting.js'
 import { normalizeModelName } from '../utils/model-names.js'
 import { detectTheme } from '../theme/index.js'
 
@@ -169,7 +175,11 @@ export function renderModelPanels(
     }
     const indent = '  ' + ' '.repeat(Y_LABEL_WIDTH + 2)
 
-    const costStr = model.billedExternally ? 'billed via plan' : formatCost(model.cost)
+    const costStr = model.billedExternally
+      ? 'billed via plan'
+      : model.costEstimated
+        ? formatEstimatedCost(model.cost)
+        : formatCost(model.cost)
 
     // Look up gateway cost for this model
     let gatewayCostStr = ''

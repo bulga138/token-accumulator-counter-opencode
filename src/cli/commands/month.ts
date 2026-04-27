@@ -175,8 +175,10 @@ function renderBudgetSection(
   if (gw.budgetResetAt) {
     const d = new Date(gw.budgetResetAt)
     const resetLabel = d.toLocaleDateString(undefined, { dateStyle: 'medium' })
-    const cycle = gw.budgetDuration ? `  (${gw.budgetDuration} cycle)` : ''
-    lines.push(`  ${'Resets:'.padEnd(12)} ${resetLabel}${cycle}`)
+    const msLeft = d.getTime() - Date.now()
+    const daysLeft = Math.ceil(msLeft / 86_400_000)
+    const timeLeft = daysLeft <= 0 ? 'today' : daysLeft === 1 ? 'tomorrow' : `${daysLeft}d left`
+    lines.push(`  ${'Resets:'.padEnd(12)} ${resetLabel}  ${timeLeft}`)
   }
 
   return lines

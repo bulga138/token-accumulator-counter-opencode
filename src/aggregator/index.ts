@@ -16,6 +16,8 @@ import type {
 } from '../data/types.js'
 import { emptyTokenSummary, addTokens } from '../data/types.js'
 import { toDateString } from '../utils/dates.js'
+import { loadOpenCodePricing, estimateCostFromPricing } from '../data/opencode-pricing.js'
+import { normalizeModelName } from '../utils/model-names.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -222,18 +224,37 @@ export function computeModelStats(events: UsageEvent[]): ModelStats[] {
 
   const totalTokens = Array.from(map.values()).reduce((sum, v) => sum + v.tokens.total, 0)
 
+  // Load pricing table once for all models (null if opencode.json not found)
+  const pricing = loadOpenCodePricing()
+
   const result: ModelStats[] = []
   for (const v of map.values()) {
     const dailySeries: DailySeries[] = Array.from(v.dailyTokens.entries())
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([date, tokens]) => ({ date, tokens }))
 
+    let cost = v.cost
+    let billedExternally = !v.hasCost
+    let costEstimated: boolean | undefined
+
+    // If OpenCode wrote cost: 0 for every event, attempt local estimation from
+    // the pricing table embedded in opencode.json. DB cost always wins when > 0.
+    if (!v.hasCost && pricing && v.tokens.total > 0) {
+      const rates = pricing.get(normalizeModelName(v.modelId))
+      if (rates) {
+        cost = estimateCostFromPricing(v.tokens, rates)
+        billedExternally = false
+        costEstimated = true
+      }
+    }
+
     result.push({
       modelId: v.modelId,
       providerId: v.providerId,
       tokens: v.tokens,
-      cost: v.cost,
-      billedExternally: !v.hasCost,
+      cost,
+      billedExternally,
+      costEstimated,
       messageCount: v.messageCount,
       sessionCount: v.sessions.size,
       activeDays: v.activeDays.size,

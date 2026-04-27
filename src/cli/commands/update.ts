@@ -369,7 +369,25 @@ export function registerUpdateCommand(program: Command): void {
         dir = parent
       }
     } catch {
-      // fall through with default
+      // fall through to binary detection
+    }
+
+    if (currentVersion === '0.0.0') {
+      try {
+        const { spawnSync } = await import('child_process')
+        const result = spawnSync(process.execPath, ['--version'], {
+          encoding: 'utf8',
+          timeout: 5000,
+        })
+        if (result.status === 0 && result.stdout) {
+          const match = result.stdout.trim().match(/v?(\d+\.\d+\.\d+)/)
+          if (match) {
+            currentVersion = match[1]
+          }
+        }
+      } catch {
+        // Give up, use default
+      }
     }
 
     console.log()

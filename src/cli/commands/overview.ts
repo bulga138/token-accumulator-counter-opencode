@@ -406,8 +406,10 @@ function formatGatewaySection(gw: GatewayMetrics | null, localCost: number): str
   if (gw.budgetResetAt) {
     const d = new Date(gw.budgetResetAt)
     const resetStr = d.toLocaleDateString(undefined, { dateStyle: 'medium' })
-    const durationStr = gw.budgetDuration ? `  (${gw.budgetDuration} cycle)` : ''
-    lines.push(`  Resets:    ${resetStr}${durationStr}`)
+    const msLeft = d.getTime() - Date.now()
+    const daysLeft = Math.ceil(msLeft / 86_400_000)
+    const timeLeft = daysLeft <= 0 ? 'today' : daysLeft === 1 ? 'tomorrow' : `${daysLeft}d left`
+    lines.push(`  Resets:    ${resetStr}  ${timeLeft}`)
   }
 
   // Local vs gateway comparison

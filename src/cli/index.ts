@@ -16,6 +16,7 @@ import { registerHealthCommand } from './commands/health.js'
 import { registerUpdateCommand } from './commands/update.js'
 import { registerUninstallCommand } from './commands/uninstall.js'
 import { registerCompletionCommand } from './commands/completion.js'
+import { registerSessionDetailCommand } from './commands/session-detail.js'
 import { existsSync, readFileSync } from 'fs'
 import { fileURLToPath } from 'url'
 import { dirname, join } from 'path'
@@ -170,6 +171,7 @@ export function createProgram(): Command {
   registerUpdateCommand(program)
   registerUninstallCommand(program)
   registerCompletionCommand(program)
+  registerSessionDetailCommand(program)
 
   // Default action (no sub-command) → run TUI if TTY available, otherwise overview
   program.action(async () => {

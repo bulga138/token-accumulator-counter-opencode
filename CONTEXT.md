@@ -2,7 +2,7 @@
 
 **Token Accumulator Counter for OpenCode** 🌮
 
-**Last Updated:** April 20, 2026
+**Last Updated:** April 27, 2026
 
 ---
 
@@ -47,6 +47,10 @@ TACO reads OpenCode's SQLite database directly using multiple database drivers f
 
 - All platforms: `~/.local/share/opencode/opencode.db` (XDG path, same as Linux)
 
+**Local Cost Estimation:**
+
+TACO reads OpenCode's `opencode.json` pricing file (located in OpenCode's install directory) to compute accurate cost estimates, especially for model IDs in dot-format (e.g., `claude-sonnet-4.6`) that OpenCode cannot price correctly. The pricing data is loaded once and cached in memory, then applied during aggregation to produce `costEstimated` values displayed with a `~` prefix throughout the UI.
+
 ## Usage
 
 ### In Your Terminal
@@ -55,9 +59,10 @@ TACO reads OpenCode's SQLite database directly using multiple database drivers f
 taco              # Interactive TUI dashboard (default)
 taco overview     # Plain text overview with heatmap
 taco models       # Model breakdown (with gateway cost column if configured)
-taco today        # Today's usage
+taco today        # Today's usage (with today-scoped gateway data)
 taco daily        # Daily breakdown (with gateway column if configured)
 taco sessions     # Recent sessions
+taco session      # Detailed session view with cost breakdown
 taco --help       # All commands
 ```
 
@@ -67,6 +72,7 @@ taco --help       # All commands
 !taco overview     # Show usage stats
 !taco today        # Today's usage
 !taco sessions     # Recent sessions
+!taco session      # Detailed session view
 !taco view         # Full dashboard
 ```
 
@@ -107,10 +113,30 @@ config.gateway.endpoint (e.g. https://custom-gateway.com/user/info)
             ├─ /user/daily/activity?start_date=...&end_date=...
             │    → Per-day spend + token counts + per-model breakdown
             │    → Used by: taco daily (Gateway $ column in main table)
+            │    → Also written to daily snapshots (~/.cache/taco/gateway-daily/YYYY-MM-DD.json)
+            │
+            ├─ /user/daily/activity?start_date=today&end_date=today
+            │    → Today-scoped spend and per-model breakdown
+            │    → Used by: taco today (primary source for "GW Today" column)
+            │
+            ├─ custom dailyMetricsEndpoint (if configured)
+            │    → Today-scoped data as alternative to /user/daily/activity
+            │    → Used by: taco today (fallback 1)
             │
             └─ /model/info
                  → Per-model pricing rates (input/output/cache cost per token)
                  → Used by: taco config gateway --test (discovery probe)
+```
+
+**Local Cost Estimation Flow:**
+
+```
+opencode.json (in OpenCode install dir)
+       │
+       └─ read by opencode-pricing.ts
+            → PricingMap: modelId → { input, output, cache } cost per token
+            → Used by: aggregator/index.ts to compute modelStats.costEstimated
+            → Displayed with formatEstimatedCost() throughout UI
 ```
 
 ## Project Structure
@@ -120,17 +146,19 @@ taco/
 ├── bin/taco.ts                  # CLI entry point
 ├── src/
 │   ├── aggregator/              # Data computation (streaming + aggregations)
+│   │   └── index.ts             # computeOverview, computeModelStats, computeMiniHeatmap
 │   ├── cli/                     # Command implementations
 │   │   └── commands/
 │   │       ├── config-cmd.ts    # taco config (incl. gateway --setup/--test/--status)
-│   │       ├── daily.ts         # taco daily (+ gateway $ column in main table)
-│   │       ├── models.ts        # taco models (+ gateway cost column)
+│   │       ├── daily.ts         # taco daily (+ gateway $ column, daily snapshots)
+│   │       ├── models.ts        # taco models (+ gateway cost column, estimated cost)
 │   │       ├── overview.ts      # taco overview (+ gateway metrics section)
-│   │       ├── today.ts         # taco today (+ gateway spend + per-model gateway cost)
+│   │       ├── today.ts         # taco today (+ today-scoped gateway data, estimated cost)
 │   │       ├── tui.ts           # TUI dashboard (+ gateway on all tabs)
 │   │       ├── update.ts        # taco update (binary self-replacement via git ls-remote)
 │   │       ├── uninstall.ts     # taco uninstall (removes binary, PATH entries, cache/config)
-│   │       └── completion.ts    # taco completion (bash/zsh/fish script generator)
+│   │       ├── completion.ts    # taco completion (bash/zsh/fish script generator)
+│   │       └── session-detail.ts # taco session (detailed session view with cost breakdown)
 │   ├── config/                  # Configuration management
 │   │   └── index.ts             # TacoConfig, GatewayConfig, GatewayAuth,
 │   │                            # GatewayFieldMapping — all config types here
@@ -138,14 +166,21 @@ taco/
 │   │   ├── db.ts                # Multi-driver SQLite loader
 │   │   ├── queries.ts           # All SQLite query functions
 │   │   ├── gateway.ts           # Primary gateway fetch (JSONPath-based, any endpoint)
-│   │   ├── gateway-litellm.ts   # LiteLLM auto-discovery (/spend/logs, /user/daily/activity)
+│   │   ├── gateway-litellm.ts   # LiteLLM auto-discovery + daily snapshots
 │   │   ├── gateway-cache.ts     # Multi-layer cache (live TTL + date-range + daily snapshots)
-│   │   └── gateway-types.ts     # All gateway type definitions
+│   │   ├── gateway-types.ts     # All gateway type definitions
+│   │   └── opencode-pricing.ts  # Local cost estimation from opencode.json
 │   ├── format/                  # Output formatting (visual, JSON, CSV, markdown)
+│   │   ├── visual.ts
+│   │   ├── json.ts
+│   │   ├── csv.ts
+│   │   └── markdown.ts
 │   ├── utils/                   # Helper functions
 │   │   ├── jsonpath.ts          # Zero-dep JSONPath resolver ($a.b[0].c) + env var resolver
-│   │   └── model-names.ts       # Model name normalization + aggregation across providers
+│   │   ├── model-names.ts       # Model name normalization + aggregation across providers
+│   │   └── formatting.ts        # formatTokens, formatCost, formatEstimatedCost
 │   └── viz/                     # ASCII charts and heatmap rendering
+│       ├── cards.ts             # Cost cards with estimated/billed indicators
 │       └── chart.ts             # renderModelPanels accepts optional gatewaySpend
 ├── tests/                       # Unit tests (Vitest)
 ├── dist/                        # Compiled JavaScript (auto-generated by tsc)
@@ -172,14 +207,18 @@ When modifying these files, also update:
 
 - **Token Tracking:** Input/output tokens, cache reads/writes, reasoning tokens
 - **Cost Analysis:** Daily summaries, projections by provider, budget warnings
+- **Local Cost Estimation:** Reads OpenCode's `opencode.json` pricing to show accurate costs even for dot-format model IDs (e.g., `claude-sonnet-4.6`) that OpenCode cannot price correctly
 - **Gateway Integration:** Real spend/budget from any LiteLLM/OpenRouter/custom proxy
   - Configurable JSONPath mappings for primary endpoint (any JSON shape)
   - LiteLLM auto-discovery: `/spend/logs`, `/user/daily/activity`, `/model/info` probed automatically
   - Per-model gateway cost column in `taco models`
   - Gateway `$` column merged into `taco daily` main table
+  - Today-scoped gateway data in `taco today` with fallback chain (daily activity → custom endpoint → billing period)
   - Gateway costs inline in TUI Models, Providers, and Overview tabs
   - Model name normalization across provider prefixes (bedrock, azure_ai, vertex_ai, etc.)
-- **Visualizations:** ASCII charts, heatmaps, TUI dashboard
+  - Daily activity snapshots cached locally for offline viewing (90-day retention)
+- **Session Details:** `taco session` command shows detailed breakdown of a single session with cost estimates and token counts
+- **Visualizations:** ASCII charts, heatmaps, TUI dashboard with estimated/billed cost indicators
 - **Cross-Platform:** Windows, macOS, Linux (zero native deps)
 - **Memory Efficient:** Handles millions of rows without overflow
 - **Zero Configuration:** Works out of the box
@@ -294,6 +333,16 @@ When the gateway is LiteLLM-compliant (LiteLLM proxy, OpenRouter, or compatible)
 
 Both `/spend/logs` and `/user/daily/activity` accept `start_date` and `end_date` query parameters — TACO automatically uses the current billing period (1st of month → today).
 
+### Today-Scoped Gateway Data
+
+The `taco today` command shows today's gateway spend with a multi-source fallback chain:
+
+1. **Primary:** `/user/daily/activity?start_date=today&end_date=today` — exact today data with per-model breakdown
+2. **Fallback 1:** Custom `dailyMetricsEndpoint` (if configured) — alternative today-scoped endpoint
+3. **Fallback 2:** Billing-period `/spend/logs` — approximate month-to-date data
+
+Today-scoped data is also written to daily snapshots (`~/.cache/taco/gateway-daily/YYYY-MM-DD.json`) for offline viewing.
+
 **OpenRouter example:**
 
 ```json
@@ -370,6 +419,13 @@ Normalization steps: strip provider prefix → strip version suffix → replace 
 3. Add to `taco config` command in `src/cli/commands/config-cmd.ts`
 4. Document in README.md
 
+**Adding local cost estimation:**
+
+1. Add pricing loader in `src/data/opencode-pricing.ts`
+2. Integrate into aggregator to compute `costEstimated`
+3. Add `formatEstimatedCost()` to `src/utils/formatting.ts`
+4. Update all formatters to display estimated costs with `~` prefix
+
 **Adding cache functionality:**
 
 1. Use `ensureDir()` from `src/data/gateway-cache.ts` for directory creation (handles permissions)
@@ -423,6 +479,7 @@ Normalization steps: strip provider prefix → strip version suffix → replace 
 - [x] Per-model gateway cost in `taco models`
 - [x] Gateway `$` column merged into `taco daily`
 - [x] Gateway costs inline in TUI (Overview, Models, Providers tabs)
+- [x] Daily activity snapshots and caching
 
 ## Development
 
