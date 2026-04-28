@@ -182,18 +182,25 @@ export function formatProjectsMarkdown(
 export function formatSessionsMarkdown(
   sessions: SessionStats[],
   label: string,
-  hasGateway = false
+  hasGateway = false,
+  relevanceMap?: Map<string, number>
 ): string {
   const costHeader = hasGateway ? 'Local $' : 'Cost'
+  const hasRelevance = relevanceMap !== undefined && relevanceMap.size > 0
+  const relHeader = hasRelevance ? ' Relevance |' : ''
+  const relSep = hasRelevance ? '----------:|' : ''
   const lines: string[] = [
     `# 🌮 TACO — Sessions${label ? ` · ${label}` : ''}`,
     '',
-    `| Title | Created | Messages | Tokens | ${costHeader} | Duration |`,
-    `|-------|---------|----------|--------|${'-'.repeat(costHeader.length + 2)}|----------|`,
+    `| Title | Created | Messages | Tokens | ${costHeader} | Duration |${relHeader}`,
+    `|-------|---------|----------|--------|${'-'.repeat(costHeader.length + 2)}|----------|${relSep}`,
   ]
   for (const s of sessions) {
+    const relCell = hasRelevance
+      ? ` ${relevanceMap!.get(s.sessionId) !== undefined ? `${(relevanceMap!.get(s.sessionId)! * 100).toFixed(1)}%` : '—'} |`
+      : ''
     lines.push(
-      `| ${s.title ?? s.sessionId} | ${new Date(s.timeCreated).toLocaleDateString()} | ${s.messageCount} | ${formatTokens(s.tokens.total)} | ${formatCost(s.cost)} | ${s.durationMs ? formatDuration(s.durationMs) : '—'} |`
+      `| ${s.title ?? s.sessionId} | ${new Date(s.timeCreated).toLocaleDateString()} | ${s.messageCount} | ${formatTokens(s.tokens.total)} | ${formatCost(s.cost)} | ${s.durationMs ? formatDuration(s.durationMs) : '—'} |${relCell}`
     )
   }
   lines.push('')
