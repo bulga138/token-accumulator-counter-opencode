@@ -56,6 +56,8 @@ curl -fsSL https://raw.githubusercontent.com/bulga138/taco/master/install.sh | b
 
 **Windows (PowerShell):**
 
+Bun binary fails on Windows, install it via clone + `install.ps1` on local.
+
 ```powershell
 # Default: Try binary first, fallback to source
 irm https://raw.githubusercontent.com/bulga138/taco/master/install.ps1 | iex
