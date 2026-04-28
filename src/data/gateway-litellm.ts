@@ -6,7 +6,14 @@
  *
  *   /spend/logs             → per-model actual spend by date range
  *   /user/daily/activity    → per-model daily breakdown with tokens
+ *   /spend/tags             → spend broken down by user-agent / request tag
  *   /model/info             → per-model pricing rates
+ *   /models                 → available model IDs (OpenAI-compatible)
+ *   /key/info               → per-key spend + budget (more accurate than /user/info)
+ *   /user/info              → per-user spend + budget
+ *   /global/spend/models    → org-wide model spend (admin only)
+ *   /health/readiness       → gateway health status
+ *
  *
  * All functions fail gracefully (return null) so callers continue working
  * with local-only data when the gateway is unavailable or non-standard.
