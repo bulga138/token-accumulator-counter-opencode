@@ -63,7 +63,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          BRANCH="version-bump/v${{ steps.version.outputs.NEW_VERSION }}"
+          BRANCH="version-bump/v${{ steps.version.outputs.NEW_VERSION }}-${{ github.run_id }}"
           git checkout -b "$BRANCH"
           git push origin "$BRANCH"
           gh pr create \
@@ -71,7 +71,7 @@ jobs:
             --head "$BRANCH" \
             --title "chore: bump version to v${{ steps.version.outputs.NEW_VERSION }}" \
             --body "Automated version bump after PR merge."
-          gh pr merge "$BRANCH" --auto --squash
+          gh pr merge "$BRANCH" --squash --delete-branch
 
       - name: Create tag
         run: |
