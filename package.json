@@ -1,6 +1,6 @@
 {
   "name": "taco",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "🌮 TACO — Token Accumulator Counter for OpenCode. Analyze and visualize your AI coding session usage across dates, models, and projects.",
   "keywords": [
     "opencode",
