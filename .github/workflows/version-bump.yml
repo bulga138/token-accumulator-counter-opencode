@@ -57,7 +57,7 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git add -A
-          git commit -m "chore: bump version to v${{ steps.version.outputs.NEW_VERSION }}"
+          git commit -m "chore: bump version to v${{ steps.version.outputs.NEW_VERSION }} [skip ci]"
 
       - name: Create Pull Request for version bump
         env:
@@ -77,9 +77,12 @@ jobs:
           done
 
       - name: Create tag
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TACO_TOKEN }}
         run: |
           git fetch origin master
           git tag -a "v${{ steps.version.outputs.NEW_VERSION }}" origin/master -m "Release v${{ steps.version.outputs.NEW_VERSION }}"
+          git remote set-url origin "https://x-access-token:${{ secrets.PAT_TACO_TOKEN }}@github.com/${{ github.repository }}.git"
           git push origin "v${{ steps.version.outputs.NEW_VERSION }}"
 
       - name: Remove labels
