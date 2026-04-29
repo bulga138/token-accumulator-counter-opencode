@@ -72,12 +72,14 @@ jobs:
             --title "chore: bump version to v${{ steps.version.outputs.NEW_VERSION }}" \
             --body "Automated version bump after PR merge."
           gh pr merge "$BRANCH" --squash --delete-branch --admin
+          for i in {1..10}; do
+            git fetch origin master && break || sleep 3
+          done
 
       - name: Create tag
         run: |
-          git checkout master
-          git pull origin master
-          git tag -a "v${{ steps.version.outputs.NEW_VERSION }}" -m "Release v${{ steps.version.outputs.NEW_VERSION }}"
+          git fetch origin master
+          git tag -a "v${{ steps.version.outputs.NEW_VERSION }}" origin/master -m "Release v${{ steps.version.outputs.NEW_VERSION }}"
           git push origin "v${{ steps.version.outputs.NEW_VERSION }}"
 
       - name: Remove labels
