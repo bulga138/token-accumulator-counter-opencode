@@ -71,7 +71,7 @@ jobs:
             --head "$BRANCH" \
             --title "chore: bump version to v${{ steps.version.outputs.NEW_VERSION }}" \
             --body "Automated version bump after PR merge."
-          gh pr merge "$BRANCH" --squash --delete-branch
+          gh pr merge "$BRANCH" --squash --delete-branch --admin
 
       - name: Create tag
         run: |
