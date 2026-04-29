@@ -43,8 +43,18 @@ export function formatProjectsJson(projects: ProjectStats[]): string {
   return JSON.stringify(projects, null, 2)
 }
 
-export function formatSessionsJson(sessions: SessionStats[]): string {
-  return JSON.stringify(sessions, null, 2)
+export function formatSessionsJson(
+  sessions: SessionStats[],
+  relevanceMap?: Map<string, number>
+): string {
+  if (!relevanceMap || relevanceMap.size === 0) {
+    return JSON.stringify(sessions, null, 2)
+  }
+  const enriched = sessions.map(s => {
+    const v = relevanceMap.get(s.sessionId)
+    return v !== undefined ? { ...s, relevanceRatio: v } : s
+  })
+  return JSON.stringify(enriched, null, 2)
 }
 
 export function formatTrendsJson(trends: PeriodStats[]): string {

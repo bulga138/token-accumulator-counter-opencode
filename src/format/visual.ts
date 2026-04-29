@@ -427,7 +427,8 @@ export function formatProjects(
 export function formatSessions(
   sessions: SessionStats[],
   rangeLabel: string,
-  hasGateway = false
+  hasGateway = false,
+  _relevanceMap?: Map<string, number>
 ): string {
   const lines: string[] = []
   lines.push(header(`Sessions${rangeLabel ? ' · ' + rangeLabel : ''}`))
@@ -469,6 +470,20 @@ export function formatSessions(
           priority: 1,
           render: r => (r.durationMs ? formatDuration(r.durationMs) : '—'),
         },
+        ...(_relevanceMap && _relevanceMap.size > 0
+          ? [
+              {
+                header: 'Relevance',
+                align: 'right' as const,
+                width: 10,
+                priority: 1,
+                render: (r: SessionStats) => {
+                  const v = _relevanceMap!.get(r.sessionId)
+                  return v !== undefined ? `${(v * 100).toFixed(1)}%` : '—'
+                },
+              },
+            ]
+          : []),
       ],
       sessions,
       { useColor }
