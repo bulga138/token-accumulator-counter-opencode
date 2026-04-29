@@ -72,8 +72,34 @@ jobs:
             --title "chore: bump version to v${{ steps.version.outputs.NEW_VERSION }}" \
             --body "Automated version bump after PR merge."
           gh pr merge "$BRANCH" --squash --delete-branch --admin
-          for i in {1..10}; do
-            git fetch origin master && break || sleep 3
+
+      - name: Wait for squash merge to land
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TACO_TOKEN }}
+        run: |
+          BRANCH="version-bump/v${{ steps.version.outputs.NEW_VERSION }}-${{ github.run_id }}"
+
+          # Get the merge commit SHA from the PR
+          for i in {1..20}; do
+            MERGE_SHA=$(gh pr view "$BRANCH" --json mergeCommit --jq '.mergeCommit.oid' 2>/dev/null || true)
+            if [[ -n "$MERGE_SHA" && "$MERGE_SHA" != "null" ]]; then
+              echo "MERGE_SHA=$MERGE_SHA" >> $GITHUB_ENV
+              echo "Merge commit: $MERGE_SHA"
+              break
+            fi
+            echo "Waiting for merge commit... ($i/20)"
+            sleep 5
+          done
+
+          # Confirm it's reachable on origin/master
+          for i in {1..20}; do
+            git fetch origin master
+            if git merge-base --is-ancestor "$MERGE_SHA" origin/master 2>/dev/null; then
+              echo "Commit is on origin/master"
+              break
+            fi
+            echo "Commit not yet on master... ($i/20)"
+            sleep 5
           done
 
       - name: Create tag
@@ -81,9 +107,15 @@ jobs:
           GH_TOKEN: ${{ secrets.PAT_TACO_TOKEN }}
         run: |
           git fetch origin master
-          git tag -a "v${{ steps.version.outputs.NEW_VERSION }}" origin/master -m "Release v${{ steps.version.outputs.NEW_VERSION }}"
+          git tag -a "v${{ steps.version.outputs.NEW_VERSION }}" "$MERGE_SHA" -m "Release v${{ steps.version.outputs.NEW_VERSION }}"
           git remote set-url origin "https://x-access-token:${{ secrets.PAT_TACO_TOKEN }}@github.com/${{ github.repository }}.git"
           git push origin "v${{ steps.version.outputs.NEW_VERSION }}"
+
+      - name: Dispatch release workflow
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TACO_TOKEN }}
+        run: |
+          gh workflow run release.yml --ref "v${{ steps.version.outputs.NEW_VERSION }}"
 
       - name: Remove labels
         uses: actions/github-script@v7
