@@ -8,22 +8,19 @@ import { getConfig } from '../../config/index.js'
 import { formatTokens, formatCost } from '../../utils/formatting.js'
 import { getColors } from '../../theme/index.js'
 import {
-  getObserverDbAsync,
+  getPluginDbAsync,
   loadToolCostStats,
   loadCacheEfficiencyStats,
-  loadObserverContextSnapshots,
-  loadObserverStreamingTiming,
-  loadObserverTokenEstimates,
-  loadObserverChatParams,
-  loadObserverRetrievalRelevance,
-  loadObserverToolLatencyBreakdown,
-  loadObserverBenchmarkRuns,
+  loadPluginContextSnapshots,
+  loadPluginStreamingTiming,
+  loadPluginTokenEstimates,
+  loadPluginChatParams,
+  loadPluginRetrievalRelevance,
+  loadPluginToolLatencyBreakdown,
+  loadPluginBenchmarkRuns,
   loadBenchmarkRunsByTask,
-} from '../../data/observer-db.js'
-import type {
-  ObserverRetrievalRelevance,
-  ObserverToolLatencyBreakdown,
-} from '../../data/observer-db.js'
+} from '../../data/plugin-db.js'
+import type { PluginRetrievalRelevance, PluginToolLatencyBreakdown } from '../../data/plugin-db.js'
 
 export function registerBenchmarkCommand(program: Command): void {
   const cmd = program
@@ -43,7 +40,7 @@ export function registerBenchmarkCommand(program: Command): void {
     .option('--from <date>', 'Start date filter (ISO or relative: 7d, 30d)')
     .option('--to <date>', 'End date filter')
     .option('--format <fmt>', 'Output format: visual | json | csv | markdown (default: visual)')
-    .option('--clear', 'Clear the observer DB (requires confirmation)')
+    .option('--clear', 'Clear the plugin DB (requires confirmation)')
 
   cmd.action(async opts => {
     const config = getConfig()
@@ -54,12 +51,12 @@ export function registerBenchmarkCommand(program: Command): void {
       return
     }
 
-    const observerDb = await getObserverDbAsync()
-    if (!observerDb) {
+    const pluginDb = await getPluginDbAsync()
+    if (!pluginDb) {
       console.error(
-        'Observer DB not found at ~/.local/share/taco/observer.db\n' +
-          'Install the taco-observer plugin in opencode.json to start collecting data:\n' +
-          '  { "plugin": ["taco-observer"] }'
+        'Plugin DB not found at ~/.local/share/taco/plugin.db\n' +
+          'Install the taco-plugin in opencode.json to start collecting data:\n' +
+          '  { "plugin": ["@bulga138/taco-plugin"] }'
       )
       process.exit(1)
     }
@@ -106,21 +103,21 @@ export function registerBenchmarkCommand(program: Command): void {
 }
 
 async function runClear(): Promise<void> {
-  const { OBSERVER_DB_PATH } = await import('../../data/observer-db.js')
+  const { PLUGIN_DB_PATH: PLUGIN_DB_PATH } = await import('../../data/plugin-db.js')
   const { existsSync, statSync } = await import('node:fs')
 
-  if (!existsSync(OBSERVER_DB_PATH)) {
-    console.log('Observer DB does not exist — nothing to clear.')
+  if (!existsSync(PLUGIN_DB_PATH)) {
+    console.log('Plugin DB does not exist — nothing to clear.')
     return
   }
 
-  const size = statSync(OBSERVER_DB_PATH).size
+  const size = statSync(PLUGIN_DB_PATH).size
   const sizeMb = (size / 1024 / 1024).toFixed(1)
 
   process.stdout.write(
-    `Observer DB: ${OBSERVER_DB_PATH}\n` +
+    `Plugin DB: ${PLUGIN_DB_PATH}\n` +
       `Size: ${sizeMb} MB\n\n` +
-      'This will permanently delete all observer data (tool I/O, streaming timing,\n' +
+      'This will permanently delete all plugin data (tool I/O, streaming timing,\n' +
       'context snapshots, LLM parameters, token estimates).\n\n' +
       'Are you sure? [y/N] '
   )
@@ -140,15 +137,15 @@ async function runClear(): Promise<void> {
 
   const { unlinkSync } = await import('node:fs')
   try {
-    unlinkSync(OBSERVER_DB_PATH)
+    unlinkSync(PLUGIN_DB_PATH)
     for (const ext of ['-wal', '-shm']) {
       try {
-        unlinkSync(OBSERVER_DB_PATH + ext)
+        unlinkSync(PLUGIN_DB_PATH + ext)
       } catch {
         /* ok */
       }
     }
-    console.log('Observer DB cleared.')
+    console.log('Plugin DB cleared.')
   } catch (err) {
     console.error('Failed to clear:', (err as Error).message)
     process.exit(1)
@@ -163,13 +160,13 @@ async function runSingleBenchmark(
 ): Promise<void> {
   const [chatParams, timing, snapshots, tokenEsts, retrievalRelevance, toolLatency, existingRuns] =
     await Promise.all([
-      loadObserverChatParams(sessionId),
-      loadObserverStreamingTiming(sessionId),
-      loadObserverContextSnapshots(sessionId),
-      loadObserverTokenEstimates(sessionId),
-      loadObserverRetrievalRelevance(sessionId),
-      loadObserverToolLatencyBreakdown(sessionId),
-      loadObserverBenchmarkRuns(sessionId),
+      loadPluginChatParams(sessionId),
+      loadPluginStreamingTiming(sessionId),
+      loadPluginContextSnapshots(sessionId),
+      loadPluginTokenEstimates(sessionId),
+      loadPluginRetrievalRelevance(sessionId),
+      loadPluginToolLatencyBreakdown(sessionId),
+      loadPluginBenchmarkRuns(sessionId),
     ])
   const toolStats = await loadToolCostStats([sessionId])
   const cacheStats = await loadCacheEfficiencyStats([sessionId])
@@ -243,12 +240,12 @@ async function writeBenchmarkRun(
   sessionId: string,
   taskId: string,
   strategy: string,
-  tokenEsts: Awaited<ReturnType<typeof loadObserverTokenEstimates>>,
-  timing: Awaited<ReturnType<typeof loadObserverStreamingTiming>>,
-  retrievalRelevance: ObserverRetrievalRelevance[],
-  toolLatency: ObserverToolLatencyBreakdown[]
+  tokenEsts: Awaited<ReturnType<typeof loadPluginTokenEstimates>>,
+  timing: Awaited<ReturnType<typeof loadPluginStreamingTiming>>,
+  retrievalRelevance: PluginRetrievalRelevance[],
+  toolLatency: PluginToolLatencyBreakdown[]
 ): Promise<void> {
-  const db = await getObserverDbAsync()
+  const db = await getPluginDbAsync()
   if (!db) return
 
   const opencodeEsts = tokenEsts.filter(e => e.approach === 'opencode')
@@ -411,10 +408,10 @@ async function runMultiBenchmark(sessionIds: string[], format: string): Promise<
   const cacheStats = await loadCacheEfficiencyStats(sessionIds)
 
   const allRelevance = (
-    await Promise.all(sessionIds.map(id => loadObserverRetrievalRelevance(id)))
+    await Promise.all(sessionIds.map(id => loadPluginRetrievalRelevance(id)))
   ).flat()
   const allLatency = (
-    await Promise.all(sessionIds.map(id => loadObserverToolLatencyBreakdown(id)))
+    await Promise.all(sessionIds.map(id => loadPluginToolLatencyBreakdown(id)))
   ).flat()
 
   const data = { sessionCount: sessionIds.length, toolStats, cacheStats, allRelevance, allLatency }
@@ -527,20 +524,20 @@ async function runComparison(idA: string, idB: string, format: string): Promise<
     [timingB, snapsB, tokenEstsB, cacheB, relevanceB, latencyB],
   ] = await Promise.all([
     Promise.all([
-      loadObserverStreamingTiming(idA),
-      loadObserverContextSnapshots(idA),
-      loadObserverTokenEstimates(idA),
+      loadPluginStreamingTiming(idA),
+      loadPluginContextSnapshots(idA),
+      loadPluginTokenEstimates(idA),
       loadCacheEfficiencyStats([idA]),
-      loadObserverRetrievalRelevance(idA),
-      loadObserverToolLatencyBreakdown(idA),
+      loadPluginRetrievalRelevance(idA),
+      loadPluginToolLatencyBreakdown(idA),
     ]),
     Promise.all([
-      loadObserverStreamingTiming(idB),
-      loadObserverContextSnapshots(idB),
-      loadObserverTokenEstimates(idB),
+      loadPluginStreamingTiming(idB),
+      loadPluginContextSnapshots(idB),
+      loadPluginTokenEstimates(idB),
       loadCacheEfficiencyStats([idB]),
-      loadObserverRetrievalRelevance(idB),
-      loadObserverToolLatencyBreakdown(idB),
+      loadPluginRetrievalRelevance(idB),
+      loadPluginToolLatencyBreakdown(idB),
     ]),
   ])
 
@@ -549,8 +546,8 @@ async function runComparison(idA: string, idB: string, format: string): Promise<
     snaps: typeof snapsA,
     ests: typeof tokenEstsA,
     cache: typeof cacheA,
-    relevance: ObserverRetrievalRelevance[],
-    latency: ObserverToolLatencyBreakdown[]
+    relevance: PluginRetrievalRelevance[],
+    latency: PluginToolLatencyBreakdown[]
   ) => {
     const opencodeEsts = ests.filter(e => e.approach === 'opencode')
     const totalCost = opencodeEsts.reduce((s, e) => s + (e.estimatedCost ?? 0), 0)
@@ -677,8 +674,8 @@ async function runComparison(idA: string, idB: string, format: string): Promise<
 function renderBenchmarkCsv(
   toolStats: Awaited<ReturnType<typeof loadToolCostStats>>,
   cacheStats: Awaited<ReturnType<typeof loadCacheEfficiencyStats>>,
-  retrievalRelevance: ObserverRetrievalRelevance[] = [],
-  toolLatency: ObserverToolLatencyBreakdown[] = []
+  retrievalRelevance: PluginRetrievalRelevance[] = [],
+  toolLatency: PluginToolLatencyBreakdown[] = []
 ): string {
   const lines: string[] = []
   lines.push('section,key,value')
@@ -720,13 +717,13 @@ function renderBenchmarkCsv(
 function renderBenchmarkMarkdown(
   sessionId: string,
   _chatParams: unknown[],
-  timing: Awaited<ReturnType<typeof loadObserverStreamingTiming>>,
-  snapshots: Awaited<ReturnType<typeof loadObserverContextSnapshots>>,
-  tokenEsts: Awaited<ReturnType<typeof loadObserverTokenEstimates>>,
+  timing: Awaited<ReturnType<typeof loadPluginStreamingTiming>>,
+  snapshots: Awaited<ReturnType<typeof loadPluginContextSnapshots>>,
+  tokenEsts: Awaited<ReturnType<typeof loadPluginTokenEstimates>>,
   toolStats: Awaited<ReturnType<typeof loadToolCostStats>>,
   cacheStats: Awaited<ReturnType<typeof loadCacheEfficiencyStats>>,
-  retrievalRelevance: ObserverRetrievalRelevance[] = [],
-  toolLatency: ObserverToolLatencyBreakdown[] = []
+  retrievalRelevance: PluginRetrievalRelevance[] = [],
+  toolLatency: PluginToolLatencyBreakdown[] = []
 ): string {
   const lines: string[] = []
   lines.push(`# TACO Benchmark — ${sessionId}\n`)
@@ -885,14 +882,14 @@ function renderBenchmarkMarkdown(
 
 function renderBenchmarkVisual(
   sessionId: string,
-  chatParams: Awaited<ReturnType<typeof loadObserverChatParams>>,
-  timing: Awaited<ReturnType<typeof loadObserverStreamingTiming>>,
-  snapshots: Awaited<ReturnType<typeof loadObserverContextSnapshots>>,
-  tokenEsts: Awaited<ReturnType<typeof loadObserverTokenEstimates>>,
+  chatParams: Awaited<ReturnType<typeof loadPluginChatParams>>,
+  timing: Awaited<ReturnType<typeof loadPluginStreamingTiming>>,
+  snapshots: Awaited<ReturnType<typeof loadPluginContextSnapshots>>,
+  tokenEsts: Awaited<ReturnType<typeof loadPluginTokenEstimates>>,
   toolStats: Awaited<ReturnType<typeof loadToolCostStats>>,
   cacheStats: Awaited<ReturnType<typeof loadCacheEfficiencyStats>>,
-  retrievalRelevance: ObserverRetrievalRelevance[] = [],
-  toolLatency: ObserverToolLatencyBreakdown[] = []
+  retrievalRelevance: PluginRetrievalRelevance[] = [],
+  toolLatency: PluginToolLatencyBreakdown[] = []
 ): string {
   const useColor = process.stdout.isTTY !== false
   const colors = getColors()

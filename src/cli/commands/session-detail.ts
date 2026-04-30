@@ -9,23 +9,23 @@ import { formatTokens, formatCost } from '../../utils/formatting.js'
 import { getColors } from '../../theme/index.js'
 import { formatDuration } from '../../utils/dates.js'
 import {
-  loadObserverChatParams,
-  loadObserverStreamingTiming,
-  loadObserverContextSnapshots,
-  loadObserverToolCalls,
-  loadObserverSystemPrompts,
-  loadObserverRetrievalRelevance,
-  loadObserverToolLatencyBreakdown,
-  getObserverDbAsync,
-} from '../../data/observer-db.js'
+  loadPluginChatParams,
+  loadPluginStreamingTiming,
+  loadPluginContextSnapshots,
+  loadPluginToolCalls,
+  loadPluginSystemPrompts,
+  loadPluginRetrievalRelevance,
+  loadPluginToolLatencyBreakdown,
+  getPluginDbAsync,
+} from '../../data/plugin-db.js'
 import type {
-  ObserverChatParams,
-  ObserverStreamingTiming,
-  ObserverContextSnapshot,
-  ObserverToolCall,
-  ObserverRetrievalRelevance,
-  ObserverToolLatencyBreakdown,
-} from '../../data/observer-db.js'
+  PluginChatParams,
+  PluginStreamingTiming,
+  PluginContextSnapshot,
+  PluginToolCall,
+  PluginRetrievalRelevance,
+  PluginToolLatencyBreakdown,
+} from '../../data/plugin-db.js'
 
 export function registerSessionDetailCommand(program: Command): void {
   program
@@ -50,15 +50,15 @@ export function registerSessionDetailCommand(program: Command): void {
           process.exit(1)
         }
         const [chatParams, timing, snapshots, toolCalls, systemPrompts] = await Promise.all([
-          loadObserverChatParams(id),
-          loadObserverStreamingTiming(id),
-          loadObserverContextSnapshots(id),
-          loadObserverToolCalls(id),
-          loadObserverSystemPrompts(id),
+          loadPluginChatParams(id),
+          loadPluginStreamingTiming(id),
+          loadPluginContextSnapshots(id),
+          loadPluginToolCalls(id),
+          loadPluginSystemPrompts(id),
         ])
         process.stdout.write(
           JSON.stringify(
-            { detail, observer: { chatParams, timing, snapshots, toolCalls, systemPrompts } },
+            { detail, plugin: { chatParams, timing, snapshots, toolCalls, systemPrompts } },
             null,
             2
           ) + '\n'
@@ -93,20 +93,20 @@ async function renderDetailAndExit(
 
   const [chatParams, timing, snapshots, toolCalls, systemPrompts, retrievalRelevance, toolLatency] =
     await Promise.all([
-      loadObserverChatParams(id),
-      loadObserverStreamingTiming(id),
-      loadObserverContextSnapshots(id),
-      loadObserverToolCalls(id),
-      loadObserverSystemPrompts(id),
-      loadObserverRetrievalRelevance(id),
-      loadObserverToolLatencyBreakdown(id),
+      loadPluginChatParams(id),
+      loadPluginStreamingTiming(id),
+      loadPluginContextSnapshots(id),
+      loadPluginToolCalls(id),
+      loadPluginSystemPrompts(id),
+      loadPluginRetrievalRelevance(id),
+      loadPluginToolLatencyBreakdown(id),
     ])
-  const hasObserver = (await getObserverDbAsync()) !== null
+  const hasPlugin = (await getPluginDbAsync()) !== null
 
   const output = formatSessionDetail(
     detail,
     opts.tools as boolean,
-    hasObserver,
+    hasPlugin,
     chatParams,
     timing,
     snapshots,
@@ -285,14 +285,14 @@ async function pickSessionFromList(
 function formatSessionDetail(
   detail: SessionDetail,
   showTools: boolean,
-  hasObserver: boolean,
-  chatParams: ObserverChatParams[],
-  timing: ObserverStreamingTiming[],
-  snapshots: ObserverContextSnapshot[],
-  toolCallsFull: ObserverToolCall[],
+  hasPlugin: boolean,
+  chatParams: PluginChatParams[],
+  timing: PluginStreamingTiming[],
+  snapshots: PluginContextSnapshot[],
+  toolCallsFull: PluginToolCall[],
   systemPromptTokens: number | null,
-  retrievalRelevance: ObserverRetrievalRelevance[] = [],
-  toolLatency: ObserverToolLatencyBreakdown[] = []
+  retrievalRelevance: PluginRetrievalRelevance[] = [],
+  toolLatency: PluginToolLatencyBreakdown[] = []
 ): string {
   const useColor = process.stdout.isTTY !== false
   const colors = getColors()
@@ -436,12 +436,12 @@ function formatSessionDetail(
     }
   }
 
-  // ══ Observer sections (only if taco-observer has data) ═══════════════════
+  // ══ Plugin sections (only if taco-plugin has data) ═══════════════════
 
-  if (hasObserver) {
+  if (hasPlugin) {
     lines.push('')
     lines.push('  ' + divider(56))
-    lines.push(dim('  Observer data (taco-observer plugin)'))
+    lines.push(dim('  Plugin data (taco-plugin)'))
     lines.push('')
 
     // ── LLM Parameters ──
@@ -584,7 +584,7 @@ function formatSessionDetail(
       }
     }
 
-    // ── Tool I/O Detail (observer data: input/output sizes, cost share) ──────
+    // ── Tool I/O Detail (plugin data: input/output sizes, cost share) ──────
     if (toolCallsFull.length > 0) {
       const completedCalls = toolCallsFull.filter(t => t.status === 'completed')
       if (completedCalls.length > 0) {
@@ -716,12 +716,10 @@ function formatSessionDetail(
         const totalCostShare = completedCalls.reduce((s, t) => s + (t.costShare ?? 0), 0)
         if (hasCostShare && totalCostShare > 0) {
           lines.push('')
-          lines.push(dim(`    Total ~cost from observer: ${formatCost(totalCostShare)}`))
+          lines.push(dim(`    Total ~cost from plugin: ${formatCost(totalCostShare)}`))
           if (totalCost > 0) {
             const pct = ((totalCostShare / totalCost) * 100).toFixed(0)
-            lines.push(
-              dim(`    (covers ${pct}% of session cost — messages with observer data only)`)
-            )
+            lines.push(dim(`    (covers ${pct}% of session cost — messages with plugin data only)`))
           }
         }
       }
@@ -860,7 +858,7 @@ function formatSessionDetail(
   } else {
     lines.push('')
     lines.push(
-      dim('  No observer data. Install taco-observer plugin to see streaming timing,') +
+      dim('  No plugin data. Install taco-plugin to see streaming timing,') +
         '\n' +
         dim('  context window utilization, LLM parameters, and full tool I/O detail.')
     )
@@ -874,11 +872,11 @@ function formatSessionDetail(
     lines.push(bold('  Message timeline'))
     lines.push('')
 
-    // Build callId → observer tool call map for enriched output
-    const observerByCallId = new Map(toolCallsFull.map(t => [t.id, t]))
+    // Build callId → plugin tool call map for enriched output
+    const pluginByCallId = new Map(toolCallsFull.map(t => [t.id, t]))
 
     for (const msg of detail.messages) {
-      lines.push(...formatMessageRow(msg, useColor, dim, colors, observerByCallId))
+      lines.push(...formatMessageRow(msg, useColor, dim, colors, pluginByCallId))
     }
   }
 
@@ -891,7 +889,7 @@ function formatMessageRow(
   useColor: boolean,
   dim: (s: string) => string,
   colors: ReturnType<typeof getColors>,
-  observerByCallId: Map<string, ObserverToolCall>
+  pluginByCallId: Map<string, PluginToolCall>
 ): string[] {
   const lines: string[] = []
   const time = new Date(msg.timeCreated).toLocaleTimeString([], {
@@ -930,14 +928,14 @@ function formatMessageRow(
 
   // Tool calls
   for (const t of msg.tools) {
-    const obs = observerByCallId.get(t.callId)
+    const obs = pluginByCallId.get(t.callId)
     const statusColor =
       t.status === 'completed' ? chalk.green : t.status === 'error' ? chalk.red : chalk.yellow
     const status = useColor ? statusColor('●') : t.status === 'completed' ? '✓' : '✗'
     const trunc = t.outputTruncated ? dim(' [truncated]') : ''
     const summary = t.inputSummary ? dim(`  ${t.inputSummary}`) : ''
 
-    // Observer enrichment: show input/output token estimates + duration
+    // Plugin enrichment: show input/output token estimates + duration
     let obsStr = ''
     if (obs) {
       const parts: string[] = []

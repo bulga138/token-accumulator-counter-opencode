@@ -1,5 +1,5 @@
 pre-commit:
-  parallel: true
+  parallel: false
   commands:
     format:
       run: pnpm exec prettier --write {staged_files}
@@ -10,7 +10,7 @@ pre-commit:
         - node_modules/**
 
 pre-push:
-  parallel: true
+  parallel: false
   commands:
     typecheck:
       run: pnpm run typecheck
