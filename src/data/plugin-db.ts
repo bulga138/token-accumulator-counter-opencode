@@ -1,8 +1,8 @@
 /**
- * Reader for the taco-observer sidecar DB (~/.local/share/taco/observer.db).
+ * Reader for the taco-plugin sidecar DB (~/.local/share/taco/plugin.db).
  *
  * Uses the same multi-driver strategy as db.ts (better-sqlite3 → sql.js).
- * The observer DB is optional — all functions return null/[] if unavailable.
+ * The plugin DB is optional — all functions return null/[] if unavailable.
  */
 
 import { existsSync, readFileSync } from 'node:fs'
@@ -10,12 +10,12 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Database } from './db.js'
 
-export const OBSERVER_DB_PATH = join(homedir(), '.local', 'share', 'taco', 'observer.db')
+export const PLUGIN_DB_PATH = join(homedir(), '.local', 'share', 'taco', 'plugin.db')
 
 let _initPromise: Promise<Database | null> | null = null
 
-async function openObserverDb(): Promise<Database | null> {
-  if (!existsSync(OBSERVER_DB_PATH)) return null
+async function openPluginDb(): Promise<Database | null> {
+  if (!existsSync(PLUGIN_DB_PATH)) return null
   try {
     const isBun = typeof Bun !== 'undefined' && (Bun as { version?: string }).version !== undefined
     if (isBun) {
@@ -32,7 +32,7 @@ async function openObserverDb(): Promise<Database | null> {
           }
         }
       }
-      const db = new BunDatabase(OBSERVER_DB_PATH, { readonly: true })
+      const db = new BunDatabase(PLUGIN_DB_PATH, { readonly: true })
       return {
         prepare<T>(sql: string) {
           const stmt = db.query(sql)
@@ -58,7 +58,7 @@ async function openObserverDb(): Promise<Database | null> {
     try {
       const betterSqlite3 = await import('better-sqlite3')
       const mod = (betterSqlite3.default || betterSqlite3) as (path: string) => unknown
-      const rawDb = mod(OBSERVER_DB_PATH) as {
+      const rawDb = mod(PLUGIN_DB_PATH) as {
         prepare: (sql: string) => {
           all: (...args: unknown[]) => unknown[]
           get: (...args: unknown[]) => unknown
@@ -94,7 +94,7 @@ async function openObserverDb(): Promise<Database | null> {
     const SQL = await (
       initSqlJs.default as (opts?: unknown) => Promise<{ Database: new (buf: Buffer) => unknown }>
     )()
-    const fileBuffer = readFileSync(OBSERVER_DB_PATH)
+    const fileBuffer = readFileSync(PLUGIN_DB_PATH)
     const rawDb = new SQL.Database(fileBuffer) as {
       prepare: (sql: string) => {
         bind: (params: unknown[]) => void
@@ -144,15 +144,15 @@ async function openObserverDb(): Promise<Database | null> {
   }
 }
 
-export async function getObserverDbAsync(): Promise<Database | null> {
+export async function getPluginDbAsync(): Promise<Database | null> {
   if (_initPromise) return _initPromise
-  _initPromise = openObserverDb()
+  _initPromise = openPluginDb()
   return _initPromise
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export interface ObserverChatParams {
+export interface PluginChatParams {
   id: string
   sessionId: string
   timestamp: number
@@ -171,7 +171,7 @@ export interface ObserverChatParams {
   costCacheWrite: number | null
 }
 
-export interface ObserverToolCall {
+export interface PluginToolCall {
   id: string
   sessionId: string
   messageId: string
@@ -194,7 +194,7 @@ export interface ObserverToolCall {
   errorText: string | null
 }
 
-export interface ObserverStepMetrics {
+export interface PluginStepMetrics {
   id: string
   sessionId: string
   messageId: string
@@ -208,7 +208,7 @@ export interface ObserverStepMetrics {
   tokensCacheWrite: number
 }
 
-export interface ObserverStreamingTiming {
+export interface PluginStreamingTiming {
   messageId: string
   sessionId: string
   requestSent: number | null
@@ -220,7 +220,7 @@ export interface ObserverStreamingTiming {
   totalStreamingMs: number | null
 }
 
-export interface ObserverContextSnapshot {
+export interface PluginContextSnapshot {
   id: string
   sessionId: string
   timestamp: number
@@ -235,7 +235,7 @@ export interface ObserverContextSnapshot {
   conversationTokenPct: number | null
 }
 
-export interface ObserverTokenEstimate {
+export interface PluginTokenEstimate {
   messageId: string
   sessionId: string
   approach: string
@@ -249,7 +249,7 @@ export interface ObserverTokenEstimate {
   timestamp: number
 }
 
-export interface ObserverSystemPrompt {
+export interface PluginSystemPrompt {
   sessionId: string
   modelId: string
   timestamp: number
@@ -260,12 +260,12 @@ export interface ObserverSystemPrompt {
 
 // ─── Session-scoped readers ─���─────────────────────────────────────────────────
 
-export async function loadObserverChatParams(sessionId: string): Promise<ObserverChatParams[]> {
-  const db = await getObserverDbAsync()
+export async function loadPluginChatParams(sessionId: string): Promise<PluginChatParams[]> {
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const rows = db
-      .prepare<ObserverChatParams>(
+      .prepare<PluginChatParams>(
         `SELECT id, session_id AS sessionId, timestamp, model_id AS modelId, provider_id AS providerId, agent, temperature, top_p AS topP, top_k AS topK, max_output_tokens AS maxOutputTokens, model_context_limit AS modelContextLimit, model_output_limit AS modelOutputLimit, cost_input AS costInput, cost_output AS costOutput, cost_cache_read AS costCacheRead, cost_cache_write AS costCacheWrite FROM chat_params WHERE session_id = ? ORDER BY timestamp ASC`
       )
       .all([sessionId])
@@ -275,12 +275,12 @@ export async function loadObserverChatParams(sessionId: string): Promise<Observe
   }
 }
 
-export async function loadObserverToolCalls(sessionId: string): Promise<ObserverToolCall[]> {
-  const db = await getObserverDbAsync()
+export async function loadPluginToolCalls(sessionId: string): Promise<PluginToolCall[]> {
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const rows = db
-      .prepare<ObserverToolCall>(
+      .prepare<PluginToolCall>(
         `SELECT id, session_id AS sessionId, message_id AS messageId, tool, timestamp_start AS timestampStart, timestamp_end AS timestampEnd, duration_ms AS durationMs, status, input_json AS inputJson, input_size_bytes AS inputSizeBytes, input_estimated_tokens AS inputEstimatedTokens, output_text AS outputText, output_compressed AS outputCompressed, output_size_bytes AS outputSizeBytes, output_estimated_tokens AS outputEstimatedTokens, next_turn_token_impact AS nextTurnTokenImpact, cost_share AS costShare, title, truncated, error_text AS errorText FROM tool_calls WHERE session_id = ? ORDER BY timestamp_start ASC`
       )
       .all([sessionId])
@@ -290,12 +290,12 @@ export async function loadObserverToolCalls(sessionId: string): Promise<Observer
   }
 }
 
-export async function loadObserverStepMetrics(sessionId: string): Promise<ObserverStepMetrics[]> {
-  const db = await getObserverDbAsync()
+export async function loadPluginStepMetrics(sessionId: string): Promise<PluginStepMetrics[]> {
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const rows = db
-      .prepare<ObserverStepMetrics>(
+      .prepare<PluginStepMetrics>(
         `SELECT id, session_id AS sessionId, message_id AS messageId, timestamp, reason, cost, tokens_input AS tokensInput, tokens_output AS tokensOutput, tokens_reasoning AS tokensReasoning, tokens_cache_read AS tokensCacheRead, tokens_cache_write AS tokensCacheWrite FROM step_metrics WHERE session_id = ? ORDER BY timestamp ASC`
       )
       .all([sessionId])
@@ -305,14 +305,14 @@ export async function loadObserverStepMetrics(sessionId: string): Promise<Observ
   }
 }
 
-export async function loadObserverStreamingTiming(
+export async function loadPluginStreamingTiming(
   sessionId: string
-): Promise<ObserverStreamingTiming[]> {
-  const db = await getObserverDbAsync()
+): Promise<PluginStreamingTiming[]> {
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const rows = db
-      .prepare<ObserverStreamingTiming>(
+      .prepare<PluginStreamingTiming>(
         `SELECT message_id AS messageId, session_id AS sessionId, request_sent AS requestSent, first_part_received AS firstPartReceived, first_text_received AS firstTextReceived, first_tool_call AS firstToolCall, message_completed AS messageCompleted, time_to_first_token_ms AS timeToFirstTokenMs, total_streaming_ms AS totalStreamingMs FROM streaming_timing WHERE session_id = ? ORDER BY request_sent ASC`
       )
       .all([sessionId])
@@ -322,14 +322,14 @@ export async function loadObserverStreamingTiming(
   }
 }
 
-export async function loadObserverContextSnapshots(
+export async function loadPluginContextSnapshots(
   sessionId: string
-): Promise<ObserverContextSnapshot[]> {
-  const db = await getObserverDbAsync()
+): Promise<PluginContextSnapshot[]> {
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const rows = db
-      .prepare<ObserverContextSnapshot>(
+      .prepare<PluginContextSnapshot>(
         `SELECT id, session_id AS sessionId, timestamp, message_count AS messageCount, total_parts AS totalParts, tool_parts AS toolParts, text_parts AS textParts, estimated_tokens AS estimatedTokens, context_utilization AS contextUtilization, system_token_pct AS systemTokenPct, tool_output_token_pct AS toolOutputTokenPct, conversation_token_pct AS conversationTokenPct FROM context_snapshots WHERE session_id = ? ORDER BY timestamp ASC`
       )
       .all([sessionId])
@@ -339,14 +339,12 @@ export async function loadObserverContextSnapshots(
   }
 }
 
-export async function loadObserverTokenEstimates(
-  sessionId: string
-): Promise<ObserverTokenEstimate[]> {
-  const db = await getObserverDbAsync()
+export async function loadPluginTokenEstimates(sessionId: string): Promise<PluginTokenEstimate[]> {
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const rows = db
-      .prepare<ObserverTokenEstimate>(
+      .prepare<PluginTokenEstimate>(
         `SELECT message_id AS messageId, session_id AS sessionId, approach, model_id AS modelId, input_tokens AS inputTokens, output_tokens AS outputTokens, cache_read_tokens AS cacheReadTokens, cache_write_tokens AS cacheWriteTokens, total_tokens AS totalTokens, estimated_cost AS estimatedCost, timestamp FROM token_estimates WHERE session_id = ? ORDER BY timestamp ASC`
       )
       .all([sessionId])
@@ -356,14 +354,12 @@ export async function loadObserverTokenEstimates(
   }
 }
 
-export async function loadObserverSystemPrompts(
-  sessionId: string
-): Promise<ObserverSystemPrompt[]> {
-  const db = await getObserverDbAsync()
+export async function loadPluginSystemPrompts(sessionId: string): Promise<PluginSystemPrompt[]> {
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const rows = db
-      .prepare<ObserverSystemPrompt>(
+      .prepare<PluginSystemPrompt>(
         `SELECT session_id AS sessionId, model_id AS modelId, timestamp, content_hash AS contentHash, content, token_count AS tokenCount FROM system_prompts WHERE session_id = ? ORDER BY timestamp ASC`
       )
       .all([sessionId])
@@ -375,7 +371,7 @@ export async function loadObserverSystemPrompts(
 
 // ─── v3 Types ─────────────────────────────────────────────────────────────────
 
-export interface ObserverRetrievalRelevance {
+export interface PluginRetrievalRelevance {
   id: number
   sessionId: string
   messageId: string
@@ -390,7 +386,7 @@ export interface ObserverRetrievalRelevance {
   timestamp: number
 }
 
-export interface ObserverToolLatencyBreakdown {
+export interface PluginToolLatencyBreakdown {
   id: number
   toolCallId: string
   sessionId: string
@@ -400,7 +396,7 @@ export interface ObserverToolLatencyBreakdown {
   timestamp: number
 }
 
-export interface ObserverBenchmarkRun {
+export interface PluginBenchmarkRun {
   id: number
   taskId: string
   sessionId: string
@@ -424,14 +420,14 @@ export interface ObserverBenchmarkRun {
 
 // ─── v3 Session-scoped readers ────────────────────────────────────────────────
 
-export async function loadObserverRetrievalRelevance(
+export async function loadPluginRetrievalRelevance(
   sessionId: string
-): Promise<ObserverRetrievalRelevance[]> {
-  const db = await getObserverDbAsync()
+): Promise<PluginRetrievalRelevance[]> {
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const rows = db
-      .prepare<ObserverRetrievalRelevance>(
+      .prepare<PluginRetrievalRelevance>(
         `SELECT id, session_id AS sessionId, message_id AS messageId, tool_call_id AS toolCallId, tool, fetched_tokens AS fetchedTokens, fetched_lines AS fetchedLines, referenced_tokens AS referencedTokens, referenced_lines AS referencedLines, relevance_ratio AS relevanceRatio, scoring_method AS scoringMethod, timestamp FROM retrieval_relevance WHERE session_id = ? ORDER BY timestamp ASC`
       )
       .all([sessionId])
@@ -441,14 +437,14 @@ export async function loadObserverRetrievalRelevance(
   }
 }
 
-export async function loadObserverToolLatencyBreakdown(
+export async function loadPluginToolLatencyBreakdown(
   sessionId: string
-): Promise<ObserverToolLatencyBreakdown[]> {
-  const db = await getObserverDbAsync()
+): Promise<PluginToolLatencyBreakdown[]> {
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const rows = db
-      .prepare<ObserverToolLatencyBreakdown>(
+      .prepare<PluginToolLatencyBreakdown>(
         `SELECT id, tool_call_id AS toolCallId, session_id AS sessionId, phase, duration_ms AS durationMs, metadata_json AS metadataJson, timestamp FROM tool_latency_breakdown WHERE session_id = ? ORDER BY timestamp ASC`
       )
       .all([sessionId])
@@ -458,14 +454,12 @@ export async function loadObserverToolLatencyBreakdown(
   }
 }
 
-export async function loadObserverBenchmarkRuns(
-  sessionId: string
-): Promise<ObserverBenchmarkRun[]> {
-  const db = await getObserverDbAsync()
+export async function loadPluginBenchmarkRuns(sessionId: string): Promise<PluginBenchmarkRun[]> {
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const rows = db
-      .prepare<ObserverBenchmarkRun>(
+      .prepare<PluginBenchmarkRun>(
         `SELECT id, task_id AS taskId, session_id AS sessionId, strategy, total_input_tokens AS totalInputTokens, total_output_tokens AS totalOutputTokens, total_cost AS totalCost, total_tool_calls AS totalToolCalls, total_fetched_tokens AS totalFetchedTokens, total_referenced_tokens AS totalReferencedTokens, precision_score AS precisionScore, avg_relevance AS avgRelevance, avg_ttft_ms AS avgTtftMs, avg_tool_duration_ms AS avgToolDurationMs, total_session_ms AS totalSessionMs, avg_query_ms AS avgQueryMs, p50_query_ms AS p50QueryMs, p95_query_ms AS p95QueryMs, timestamp FROM benchmark_runs WHERE session_id = ? ORDER BY timestamp DESC`
       )
       .all([sessionId])
@@ -475,12 +469,12 @@ export async function loadObserverBenchmarkRuns(
   }
 }
 
-export async function loadBenchmarkRunsByTask(taskId: string): Promise<ObserverBenchmarkRun[]> {
-  const db = await getObserverDbAsync()
+export async function loadBenchmarkRunsByTask(taskId: string): Promise<PluginBenchmarkRun[]> {
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const rows = db
-      .prepare<ObserverBenchmarkRun>(
+      .prepare<PluginBenchmarkRun>(
         `SELECT id, task_id AS taskId, session_id AS sessionId, strategy, total_input_tokens AS totalInputTokens, total_output_tokens AS totalOutputTokens, total_cost AS totalCost, total_tool_calls AS totalToolCalls, total_fetched_tokens AS totalFetchedTokens, total_referenced_tokens AS totalReferencedTokens, precision_score AS precisionScore, avg_relevance AS avgRelevance, avg_ttft_ms AS avgTtftMs, avg_tool_duration_ms AS avgToolDurationMs, total_session_ms AS totalSessionMs, avg_query_ms AS avgQueryMs, p50_query_ms AS p50QueryMs, p95_query_ms AS p95QueryMs, timestamp FROM benchmark_runs WHERE task_id = ? ORDER BY timestamp DESC`
       )
       .all([taskId])
@@ -507,7 +501,7 @@ export interface ToolCostStat {
 }
 
 export async function loadToolCostStats(sessionIds?: string[]): Promise<ToolCostStat[]> {
-  const db = await getObserverDbAsync()
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const where =
@@ -541,7 +535,7 @@ export interface CacheEfficiencyStat {
 export async function loadCacheEfficiencyStats(
   sessionIds?: string[]
 ): Promise<CacheEfficiencyStat[]> {
-  const db = await getObserverDbAsync()
+  const db = await getPluginDbAsync()
   if (!db) return []
   try {
     const where =

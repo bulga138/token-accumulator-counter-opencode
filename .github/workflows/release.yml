@@ -109,21 +109,3 @@ jobs:
           files: taco-*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # 3. Publish the draft release
-  publish-release:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Publish release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: ${{ needs.create-release.outputs.release_id }},
-              draft: false
-            });
